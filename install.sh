@@ -280,17 +280,17 @@ create_env() {
         cp .env.example .env
         local SECRET
         SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-        sed -i "s/change-me-to-a-long-random-string/$SECRET/" .env
-        sed -i "s|mysql+aiomysql://aistra:aistra123@localhost:3306/aistra_stream|mysql+aiomysql://${DB_USER}:${DB_PASS}@localhost:3306/${DB_NAME}|" .env
+        # Replace the placeholder (whatever it is) on the SECRET_KEY line
+        sed -i "s|^SECRET_KEY=.*|SECRET_KEY=${SECRET}|" .env
+        sed -i "s|^DATABASE_URL=.*|DATABASE_URL=mysql+aiomysql://${DB_USER}:${DB_PASS}@localhost:3306/${DB_NAME}|" .env
 
-        # Detectar caminhos dos binários
+        # Detectar caminhos dos binários e atualizar .env
         FFMPEG_PATH=$(command -v ffmpeg || echo "/usr/bin/ffmpeg")
         N_M3U8DL_PATH=$(command -v n_m3u8dl || echo "/usr/local/bin/n_m3u8dl")
         MP4DECRYPT_PATH=$(command -v mp4decrypt || echo "/usr/local/bin/mp4decrypt")
-        sed -i "s|N_M3U8DL=.*|N_M3U8DL=${N_M3U8DL_PATH}|" .env
-        sed -i "s|FFMPEG=.*|FFMPEG=${FFMPEG_PATH}|" .env
-        # Adiciona MP4DECRYPT se não existir
-        grep -q "^MP4DECRYPT=" .env || echo "MP4DECRYPT=${MP4DECRYPT_PATH}" >> .env
+        sed -i "s|^N_M3U8DL=.*|N_M3U8DL=${N_M3U8DL_PATH}|" .env
+        sed -i "s|^MP4DECRYPT=.*|MP4DECRYPT=${MP4DECRYPT_PATH}|" .env
+        sed -i "s|^FFMPEG=.*|FFMPEG=${FFMPEG_PATH}|" .env
         ok "Arquivo .env criado"
     else
         warn ".env já existe — mantendo configuração atual"

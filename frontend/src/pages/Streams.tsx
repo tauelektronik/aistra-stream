@@ -39,7 +39,7 @@ function StreamPlayer({ streamId, bufferSeconds, onClose }: {
 }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const hlsRef   = useRef<Hls | null>(null)
-  const [status, setStatus] = useState('Conectando…')
+  const [status, setStatus] = useState('Iniciando stream… (pode levar até 20s)')
 
   useEffect(() => {
     const video = videoRef.current
@@ -60,6 +60,13 @@ function StreamPlayer({ streamId, bufferSeconds, onClose }: {
         enableWorker:                true,
         abrEwmaFastLive:             3.0,
         abrEwmaSlowLive:             9.0,
+        // Allow up to 60s for stream startup (PHP redirect + CDN + ffmpeg init)
+        manifestLoadingTimeOut:      60000,
+        manifestLoadingMaxRetry:     5,
+        manifestLoadingRetryDelay:   3000,
+        levelLoadingTimeOut:         30000,
+        levelLoadingMaxRetry:        4,
+        fragLoadingTimeOut:          30000,
       })
       hlsRef.current = hls
       hls.on(Hls.Events.MANIFEST_PARSED, () => { setStatus(''); video.play().catch(() => {}) })

@@ -1,9 +1,11 @@
 """
 Pydantic schemas for request/response validation.
 """
-from pydantic import BaseModel, Field
+import re
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from datetime import datetime
+from urllib.parse import urlparse
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -26,7 +28,7 @@ class UserOut(BaseModel):
 
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=8)
     email:    Optional[str] = None
     role:     str = "viewer"
 
@@ -34,7 +36,63 @@ class UserUpdate(BaseModel):
     email:    Optional[str] = None
     role:     Optional[str] = None
     active:   Optional[bool] = None
-    password: Optional[str] = None
+    password: Optional[str] = Field(None, min_length=8)
+
+
+# ── Validators ────────────────────────────────────────────────────────────────
+
+_ALLOWED_SCHEMES = {"http", "https", "rtmp", "rtmps", "rtsp", "rtsps", "udp", "rtp", "srt"}
+_HEX_RE = re.compile(r'^[0-9a-fA-F]+$')
+
+def _validate_stream_url(v: Optional[str]) -> Optional[str]:
+    if not v:
+        return v
+    if len(v) > 2048:
+        raise ValueError("URL muito longa (máx 2048 caracteres)")
+    try:
+        parsed = urlparse(v)
+        if parsed.scheme.lower() not in _ALLOWED_SCHEMES:
+            raise ValueError(f"Protocolo não permitido: '{parsed.scheme}'. Use: {', '.join(sorted(_ALLOWED_SCHEMES))}")
+        if ".." in (parsed.path or ""):
+            raise ValueError("URL contém path traversal")
+    except ValueError:
+        raise
+    except Exception:
+        raise ValueError("URL inválida")
+    return v
+
+def _validate_drm_keys(v: Optional[str]) -> Optional[str]:
+    if not v:
+        return v
+    lines = [l.strip() for l in v.splitlines() if l.strip()]
+    for line in lines:
+        if ":" not in line:
+            raise ValueError(f"Formato inválido: '{line[:30]}'. Use KID:KEY (hex)")
+        kid, _, key = line.partition(":")
+        kid = kid.strip().replace(" ", "")
+        key = key.strip().replace(" ", "")
+        # Zeros are valid (placeholder keys)
+        if len(kid) not in (32, 64) or not _HEX_RE.match(kid):
+            raise ValueError(f"KID inválido: '{kid[:32]}'. Deve ter 32 hex chars")
+        if len(key) not in (32, 64) or not _HEX_RE.match(key):
+            raise ValueError(f"KEY inválida: '{key[:32]}'. Deve ter 32 hex chars")
+    return v
+
+def _validate_rtmp(v: Optional[str]) -> Optional[str]:
+    if not v:
+        return v
+    parsed = urlparse(v)
+    if parsed.scheme.lower() not in {"rtmp", "rtmps"}:
+        raise ValueError("Saída RTMP deve começar com rtmp:// ou rtmps://")
+    return v
+
+def _validate_udp(v: Optional[str]) -> Optional[str]:
+    if not v:
+        return v
+    parsed = urlparse(v)
+    if parsed.scheme.lower() not in {"udp", "rtp", "srt"}:
+        raise ValueError("Saída UDP deve começar com udp://, rtp:// ou srt://")
+    return v
 
 
 # ── Streams ───────────────────────────────────────────────────────────────────
@@ -43,8 +101,8 @@ class StreamBase(BaseModel):
     name:             str
     url:              str
     drm_type:         str = "none"
-    drm_keys:         Optional[str] = None   # "KID:KEY\nKID:KEY\n..." (CDM format, multiple lines)
-    drm_kid:          Optional[str] = None   # legacy single KID (still accepted)
+    drm_keys:         Optional[str] = None   # "KID:KEY\nKID:KEY\n..." (CDM format)
+    drm_kid:          Optional[str] = None   # legacy single KID
     drm_key:          Optional[str] = None   # legacy single KEY
     stream_type:      str = "live"
     video_codec:      str = "libx264"
@@ -60,6 +118,22 @@ class StreamBase(BaseModel):
     output_rtmp:      Optional[str] = None
     output_udp:       Optional[str] = None
     enabled:          bool = True
+
+    @field_validator("url")
+    @classmethod
+    def check_url(cls, v): return _validate_stream_url(v)
+
+    @field_validator("drm_keys")
+    @classmethod
+    def check_drm_keys(cls, v): return _validate_drm_keys(v)
+
+    @field_validator("output_rtmp")
+    @classmethod
+    def check_rtmp(cls, v): return _validate_rtmp(v)
+
+    @field_validator("output_udp")
+    @classmethod
+    def check_udp(cls, v): return _validate_udp(v)
 
 class StreamCreate(StreamBase):
     id: str = Field(..., min_length=2, max_length=50, pattern=r'^[a-zA-Z0-9_-]+$')

@@ -2,6 +2,7 @@
 JWT authentication helpers.
 """
 import os
+import sys
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -10,9 +11,34 @@ from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
-SECRET_KEY   = os.getenv("SECRET_KEY", "change-me-in-production-use-long-random-string")
-ALGORITHM    = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("TOKEN_EXPIRE_MINUTES", "1440"))  # 24h default
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+ALGORITHM  = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("TOKEN_EXPIRE_MINUTES", "1440"))
+
+# ── Startup validation ────────────────────────────────────────────────────────
+
+_WEAK_KEYS = {"", "change-me-in-production-use-long-random-string",
+              "change-me-to-a-long-random-string", "secret", "dev"}
+
+if SECRET_KEY in _WEAK_KEYS or len(SECRET_KEY) < 32:
+    if os.getenv("AISTRA_INSECURE_KEY"):
+        # Allow in dev with explicit opt-in
+        import logging
+        logging.getLogger(__name__).warning(
+            "SECRET_KEY não definido ou fraco — usando modo inseguro (dev only)!"
+        )
+        SECRET_KEY = "dev-insecure-key-do-not-use-in-production-32ch"
+    else:
+        print(
+            "\n[ERRO CRÍTICO] SECRET_KEY não definido ou muito fraco.\n"
+            "Gere uma chave segura com:\n"
+            "  python3 -c \"import secrets; print(secrets.token_hex(32))\"\n"
+            "E defina em /opt/aistra-stream/.env como SECRET_KEY=<valor>\n",
+            file=sys.stderr
+        )
+        sys.exit(1)
+
+# ── Crypto ────────────────────────────────────────────────────────────────────
 
 pwd_context   = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -49,6 +75,7 @@ def decode_token(token: str) -> dict:
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import get_db
 from backend import crud
+
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),

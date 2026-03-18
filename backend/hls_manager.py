@@ -273,10 +273,15 @@ class HLSManager:
 
         ff_args = [
             ff_bin, "-hide_banner",
-            "-fflags",      "+genpts+discardcorrupt+igndts",
+            "-fflags",      "+genpts+discardcorrupt",
             "-err_detect",  "ignore_err",
             "-analyzeduration", "3000000",
             "-probesize",       "5000000",
+            # Reconnect options — essential for live HLS streams
+            "-reconnect",            "1",
+            "-reconnect_at_eof",     "1",
+            "-reconnect_streamed",   "1",
+            "-reconnect_delay_max",  "5",
         ]
         # User-Agent must come before -i (HTTP input option)
         if stream.user_agent:

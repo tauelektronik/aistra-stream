@@ -341,7 +341,7 @@ export default function Streams() {
     <div className="page">
       <div className="page-header">
         <h1>Streams</h1>
-        <div style={{ display:'flex', gap:8 }}>
+        <div className="page-header-actions">
           <button className="btn btn-ghost btn-sm" onClick={load}><FiRefreshCw size={13} /> Atualizar</button>
           {canEdit && (
             <button className="btn btn-primary btn-sm" onClick={() => setEditing('new')}>
@@ -366,14 +366,15 @@ export default function Streams() {
           </div>
         ) : (
           <div className="card" style={{ padding:0, overflow:'hidden' }}>
+            <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Nome</th>
-                  <th>ID</th>
-                  <th>DRM</th>
-                  <th>Codec</th>
-                  <th>Buffer</th>
+                  <th className="col-hide-xs">ID</th>
+                  <th className="col-hide-xs">DRM</th>
+                  <th className="col-hide-xs">Codec</th>
+                  <th className="col-hide-xs">Buffer</th>
                   <th>Status</th>
                   <th>Ações</th>
                 </tr>
@@ -387,19 +388,19 @@ export default function Streams() {
                         {s.url.length > 60 ? s.url.slice(0,60)+'…' : s.url}
                       </div>
                     </td>
-                    <td><code style={{ fontSize:12, color:'var(--text2)' }}>{s.id}</code></td>
-                    <td>
+                    <td className="col-hide-xs"><code style={{ fontSize:12, color:'var(--text2)' }}>{s.id}</code></td>
+                    <td className="col-hide-xs">
                       {s.drm_type === 'cenc-ctr'
                         ? <span className="badge" style={{ background:'#1e1b4b', color:'#818cf8' }}>CENC-CTR</span>
                         : <span style={{ color:'var(--text3)', fontSize:12 }}>—</span>
                       }
                     </td>
-                    <td>
+                    <td className="col-hide-xs">
                       <span style={{ fontSize:12, color:'var(--text2)' }}>
                         {s.video_codec === 'copy' ? 'copy' : `${s.video_codec} ${s.video_preset}`}
                       </span>
                     </td>
-                    <td><span style={{ fontSize:12, color:'var(--text2)' }}>{s.buffer_seconds}s</span></td>
+                    <td className="col-hide-xs"><span style={{ fontSize:12, color:'var(--text2)' }}>{s.buffer_seconds}s</span></td>
                     <td><StatusBadge status={s.status} /></td>
                     <td>
                       <div style={{ display:'flex', gap:6 }}>
@@ -433,6 +434,7 @@ export default function Streams() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </div>

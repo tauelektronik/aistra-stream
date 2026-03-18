@@ -1,9 +1,21 @@
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { FiVideo, FiUsers, FiLogOut } from 'react-icons/fi'
+import { useState, useEffect } from 'react'
+import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
+import { FiVideo, FiUsers, FiLogOut, FiMenu } from 'react-icons/fi'
 
 export default function Layout() {
-  const nav  = useNavigate()
-  const user = JSON.parse(localStorage.getItem('user') || '{}')
+  const nav      = useNavigate()
+  const location = useLocation()
+  const user     = JSON.parse(localStorage.getItem('user') || '{}')
+  const [open, setOpen] = useState(false)
+
+  // Close sidebar on navigation (mobile)
+  useEffect(() => { setOpen(false) }, [location.pathname])
+
+  // Prevent body scroll when sidebar open on mobile
+  useEffect(() => {
+    document.body.style.overflow = open ? 'hidden' : ''
+    return () => { document.body.style.overflow = '' }
+  }, [open])
 
   function logout() {
     localStorage.removeItem('token')
@@ -13,7 +25,10 @@ export default function Layout() {
 
   return (
     <div className="layout">
-      <aside className="sidebar">
+      {/* Backdrop overlay — closes sidebar on mobile */}
+      <div className={`sidebar-overlay${open ? ' open' : ''}`} onClick={() => setOpen(false)} />
+
+      <aside className={`sidebar${open ? ' open' : ''}`}>
         <div className="sidebar-logo">📡 Aistra Stream</div>
         <nav className="sidebar-nav">
           <NavLink to="/streams" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
@@ -35,7 +50,15 @@ export default function Layout() {
           </button>
         </div>
       </aside>
+
       <main className="main-content">
+        {/* Mobile top bar with hamburger */}
+        <div className="mobile-topbar">
+          <button className="menu-btn" onClick={() => setOpen(o => !o)} aria-label="Abrir menu">
+            <span /><span /><span />
+          </button>
+          <span className="topbar-title">📡 Aistra Stream</span>
+        </div>
         <Outlet />
       </main>
     </div>

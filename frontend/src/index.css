@@ -200,15 +200,19 @@ tr:hover td { background: var(--bg3); }
 @media (max-width: 768px) {
   .mobile-topbar { display: flex; }
 
-  /* Sidebar becomes off-canvas drawer */
+  /* Sidebar becomes off-canvas drawer — fully removed from flex flow */
   .sidebar {
     position: fixed; top: 0; left: 0; bottom: 0;
     transform: translateX(-100%);
     width: 260px;
+    flex-basis: 0; /* prevent flex space reservation */
     box-shadow: 4px 0 32px rgba(0,0,0,.6);
   }
   .sidebar.open { transform: translateX(0); }
   .sidebar-overlay.open { display: block; }
+
+  /* Main content fills full width on mobile */
+  .main-content { width: 100%; }
 
   /* Modal slides up from bottom */
   .modal-overlay { padding: 0; align-items: flex-end; }

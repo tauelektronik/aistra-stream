@@ -43,7 +43,12 @@ export default function Users() {
       else       await api.put(`/api/users/${(editing as User).id}`, payload)
       setEditing(null); load()
     } catch(e: any) {
-      setError(e.response?.data?.detail || 'Erro ao salvar')
+      const detail = e.response?.data?.detail
+      if (Array.isArray(detail)) {
+        setError(detail.map((d: any) => `${d.loc?.slice(-1)[0]}: ${d.msg}`).join(' | '))
+      } else {
+        setError(detail || 'Erro ao salvar')
+      }
     } finally { setSaving(false) }
   }
 
@@ -126,7 +131,13 @@ export default function Users() {
               <div className="form-group">
                 <label>{editing === 'new' ? 'Senha' : 'Nova senha (vazio = não alterar)'}</label>
                 <input type="password" value={form.password}
-                       onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
+                       onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                       placeholder={editing === 'new' ? 'Mínimo 8 caracteres' : ''} />
+                {editing === 'new' && form.password.length > 0 && form.password.length < 8 && (
+                  <span className="form-hint" style={{ color:'var(--warning)' }}>
+                    Senha deve ter ao menos 8 caracteres ({form.password.length}/8)
+                  </span>
+                )}
               </div>
               <div className="form-group">
                 <label>Email</label>

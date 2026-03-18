@@ -20,9 +20,10 @@ HLS_BASE  = os.getenv("HLS_BASE",  "/tmp/aistra_stream_hls")
 PIPE_BASE = os.getenv("PIPE_BASE", "/tmp/aistra_stream_pipes")
 TMP_BASE  = os.getenv("TMP_BASE",  "/tmp/aistra_stream_tmp")
 
-N_M3U8DL  = os.getenv("N_M3U8DL",  "/usr/local/bin/n_m3u8dl")
-FFMPEG    = os.getenv("FFMPEG",    "/usr/bin/ffmpeg")
-FFMPEG7   = os.getenv("FFMPEG7",   "/usr/local/bin/ffmpeg7")
+N_M3U8DL    = os.getenv("N_M3U8DL",    "/usr/local/bin/n_m3u8dl")
+MP4DECRYPT  = os.getenv("MP4DECRYPT",  "/usr/local/bin/mp4decrypt")
+FFMPEG      = os.getenv("FFMPEG",      "/usr/bin/ffmpeg")
+FFMPEG7     = os.getenv("FFMPEG7",     "/usr/local/bin/ffmpeg7")
 
 
 def _alloc_port() -> int:
@@ -170,6 +171,7 @@ class HLSManager:
             "-sa", "best",
             "--no-ansi-color",
             "--key", key_arg,
+            "--decryption-binary-path", MP4DECRYPT,
             "--live-real-time-merge",
             "--live-pipe-mux",
             "--ffmpeg-binary-path", FFMPEG,

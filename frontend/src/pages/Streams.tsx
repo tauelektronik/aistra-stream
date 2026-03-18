@@ -104,11 +104,25 @@ function StreamModal({ stream, onSave, onClose }: {
   async function save() {
     setSaving(true); setError('')
     try {
-      if (isNew) await api.post('/api/streams', form)
-      else       await api.put(`/api/streams/${stream!.id}`, form)
+      const payload = { ...form }
+      // Auto-generate id from name if empty
+      if (isNew && !payload.id) {
+        payload.id = payload.name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 50) || 'stream_' + Date.now()
+      }
+      if (isNew) await api.post('/api/streams', payload)
+      else       await api.put(`/api/streams/${stream!.id}`, payload)
       onSave()
     } catch(e: any) {
-      setError(e.response?.data?.detail || 'Erro ao salvar')
+      const detail = e.response?.data?.detail
+      if (Array.isArray(detail)) {
+        setError(detail.map((d: any) => `${d.loc?.slice(-1)[0]}: ${d.msg}`).join(' | '))
+      } else {
+        setError(detail || 'Erro ao salvar')
+      }
     } finally { setSaving(false) }
   }
 

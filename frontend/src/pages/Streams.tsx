@@ -90,6 +90,37 @@ function StreamPlayer({ streamId, bufferSeconds, onClose }: {
   )
 }
 
+// ─── Form helpers (defined OUTSIDE StreamModal to keep stable identity) ───────
+
+function Row({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
+  return (
+    <div className="form-group">
+      <label>{label}</label>
+      {children}
+      {hint && <span className="form-hint">{hint}</span>}
+    </div>
+  )
+}
+
+function Sel({ k, opts, form, set }: { k: string; opts: [string, string][]; form: any; set: (k: string, v: any) => void }) {
+  return (
+    <select value={form[k]} onChange={e => set(k, e.target.value)}>
+      {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+    </select>
+  )
+}
+
+function Num({ k, min, max, step=1, form, set }: { k: string; min: number; max: number; step?: number; form: any; set: (k: string, v: any) => void }) {
+  return (
+    <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+      <input type="range" min={min} max={max} step={step} value={form[k]}
+             onChange={e => set(k, Number(e.target.value))}
+             style={{ flex:1, padding:0, border:'none', background:'transparent', accentColor:'var(--accent)' }} />
+      <span style={{ minWidth:36, color:'var(--text2)', fontSize:13 }}>{form[k]}</span>
+    </div>
+  )
+}
+
 // ─── Stream form modal ────────────────────────────────────────────────────────
 
 function StreamModal({ stream, onSave, onClose }: {
@@ -128,27 +159,6 @@ function StreamModal({ stream, onSave, onClose }: {
     } finally { setSaving(false) }
   }
 
-  const Row = ({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) => (
-    <div className="form-group">
-      <label>{label}</label>
-      {children}
-      {hint && <span className="form-hint">{hint}</span>}
-    </div>
-  )
-  const Sel = ({ k, opts }: { k: string; opts: [string, string][] }) => (
-    <select value={form[k]} onChange={e => set(k, e.target.value)}>
-      {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-    </select>
-  )
-  const Num = ({ k, min, max, step=1 }: { k: string; min: number; max: number; step?: number }) => (
-    <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-      <input type="range" min={min} max={max} step={step} value={form[k]}
-             onChange={e => set(k, Number(e.target.value))}
-             style={{ flex:1, padding:0, border:'none', background:'transparent', accentColor:'var(--accent)' }} />
-      <span style={{ minWidth:36, color:'var(--text2)', fontSize:13 }}>{form[k]}</span>
-    </div>
-  )
-
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal">
@@ -178,10 +188,10 @@ function StreamModal({ stream, onSave, onClose }: {
               <textarea value={form.url} onChange={e => set('url', e.target.value)} rows={3} placeholder="https://..." />
             </Row>
             <Row label="Tipo de stream">
-              <Sel k="stream_type" opts={[['live','Ao vivo'],['vod','VOD']]} />
+              <Sel form={form} set={set} k="stream_type" opts={[['live','Ao vivo'],['vod','VOD']]} />
             </Row>
             <Row label="DRM">
-              <Sel k="drm_type" opts={[['none','Sem DRM'],['cenc-ctr','CENC-CTR (Disney+, etc.)']]} />
+              <Sel form={form} set={set} k="drm_type" opts={[['none','Sem DRM'],['cenc-ctr','CENC-CTR (Disney+, etc.)']]} />
             </Row>
             {form.drm_type === 'cenc-ctr' && <>
               <Row label="Keys / CDM Script" hint="Um par KID:KEY por linha — formato de saída de CDM tools">
@@ -202,7 +212,7 @@ function StreamModal({ stream, onSave, onClose }: {
 
           {tab === 'video' && <>
             <Row label="Codec de vídeo">
-              <Sel k="video_codec" opts={[
+              <Sel form={form} set={set} k="video_codec" opts={[
                 ['copy','Copy (sem transcode — mais rápido)'],
                 ['libx264','libx264 (CPU — qualidade alta)'],
                 ['h264_nvenc','h264_nvenc (GPU NVIDIA)'],
@@ -210,16 +220,16 @@ function StreamModal({ stream, onSave, onClose }: {
             </Row>
             {form.video_codec !== 'copy' && <>
               <Row label="Preset (velocidade × qualidade)" hint="Mais rápido = menos CPU, menor qualidade">
-                <Sel k="video_preset" opts={[
+                <Sel form={form} set={set} k="video_preset" opts={[
                   ['ultrafast','ultrafast'],['superfast','superfast'],['veryfast','veryfast'],
                   ['faster','faster'],['fast','fast'],['medium','medium'],
                 ]} />
               </Row>
               <Row label={`CRF: ${form.video_crf} — qualidade (menor = melhor)`}>
-                <Num k="video_crf" min={0} max={51} />
+                <Num form={form} set={set} k="video_crf" min={0} max={51} />
               </Row>
               <Row label="Resolução">
-                <Sel k="video_resolution" opts={[
+                <Sel form={form} set={set} k="video_resolution" opts={[
                   ['original','Original'],['1920x1080','1080p'],['1280x720','720p'],['854x480','480p'],
                 ]} />
               </Row>
@@ -231,24 +241,24 @@ function StreamModal({ stream, onSave, onClose }: {
 
           {tab === 'audio' && <>
             <Row label="Codec de áudio">
-              <Sel k="audio_codec" opts={[['copy','Copy'],['aac','AAC (transcode)']]} />
+              <Sel form={form} set={set} k="audio_codec" opts={[['copy','Copy'],['aac','AAC (transcode)']]} />
             </Row>
             {form.audio_codec !== 'copy' && (
               <Row label="Bitrate de áudio">
-                <Sel k="audio_bitrate" opts={[['96k','96k'],['128k','128k'],['192k','192k'],['256k','256k']]} />
+                <Sel form={form} set={set} k="audio_bitrate" opts={[['96k','96k'],['128k','128k'],['192k','192k'],['256k','256k']]} />
               </Row>
             )}
           </>}
 
           {tab === 'hls' && <>
             <Row label={`Duração do segmento HLS: ${form.hls_time}s`} hint="Menor = menor latência, maior = mais estável">
-              <Num k="hls_time" min={1} max={10} />
+              <Num form={form} set={set} k="hls_time" min={1} max={10} />
             </Row>
             <Row label={`Segmentos na playlist: ${form.hls_list_size}`} hint="Janela disponível para o player">
-              <Num k="hls_list_size" min={5} max={120} />
+              <Num form={form} set={set} k="hls_list_size" min={5} max={120} />
             </Row>
             <Row label={`Buffer do player: ${form.buffer_seconds}s`} hint="Atraso em relação ao vivo — mais = mais suave">
-              <Num k="buffer_seconds" min={5} max={120} step={5} />
+              <Num form={form} set={set} k="buffer_seconds" min={5} max={120} step={5} />
             </Row>
             <div className="card" style={{ background:'var(--bg3)', padding:14, fontSize:12, color:'var(--text3)' }}>
               <strong style={{ color:'var(--text2)' }}>Janela disponível:</strong>{' '}

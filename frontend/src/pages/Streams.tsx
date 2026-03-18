@@ -192,6 +192,7 @@ function StreamModal({ stream, onSave, onClose }: {
                   placeholder={'c2e511d926db4f209e8cd856656e6bb1:4d67d0f698ad334072056dfbf61d4a99\n0101a79fc2c4cd3239893a14661661ac:dbbf91281e295228e8a49e273f77bd9d\n...'}
                   style={{ fontFamily:'monospace', fontSize:12, resize:'vertical' }}
                 />
+              </Row>
             </>}
             <div style={{ display:'flex', alignItems:'center', gap:10 }}>
               <input type="checkbox" id="enabled" checked={form.enabled} onChange={e => set('enabled', e.target.checked)} style={{ width:'auto' }} />

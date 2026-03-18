@@ -147,6 +147,7 @@ class StreamBase(BaseModel):
     buffer_seconds:   int = Field(20, ge=5, le=120)
     output_rtmp:      Optional[str] = None
     output_udp:       Optional[str] = None
+    output_qualities: Optional[str] = None   # comma-separated ABR qualities, e.g. "1080p,720p,480p"
     proxy:            Optional[str] = None   # http://user:pass@host:port or socks5://host:port
     user_agent:       Optional[str] = None   # custom User-Agent header
     backup_urls:      Optional[str] = None   # newline-separated fallback URLs (failover/balance)
@@ -167,6 +168,17 @@ class StreamBase(BaseModel):
     @field_validator("output_udp")
     @classmethod
     def check_udp(cls, v): return _validate_udp(v)
+
+    @field_validator("output_qualities")
+    @classmethod
+    def check_output_qualities(cls, v):
+        if not v:
+            return v
+        valid = {"360p", "480p", "720p", "1080p"}
+        for q in [x.strip() for x in v.split(",") if x.strip()]:
+            if q not in valid:
+                raise ValueError(f"Qualidade inválida: '{q}'. Use: {', '.join(sorted(valid))}")
+        return v
 
     @field_validator("proxy")
     @classmethod

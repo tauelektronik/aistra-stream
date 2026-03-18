@@ -25,6 +25,14 @@ MP4DECRYPT  = os.getenv("MP4DECRYPT",  "/usr/local/bin/mp4decrypt")
 FFMPEG      = os.getenv("FFMPEG",      "/usr/bin/ffmpeg")
 FFMPEG7     = os.getenv("FFMPEG7",     "/usr/local/bin/ffmpeg7")
 
+# ABR quality presets: video bitrate / audio bitrate / scale filter
+_QUALITY_PRESETS = {
+    "1080p": {"scale": "1920:-2", "vbr": "4500k", "abr": "192k"},
+    "720p":  {"scale": "1280:-2", "vbr": "2800k", "abr": "128k"},
+    "480p":  {"scale": "854:-2",  "vbr": "1400k", "abr": "96k"},
+    "360p":  {"scale": "640:-2",  "vbr": "800k",  "abr": "96k"},
+}
+
 
 def _alloc_port() -> int:
     """Grab a free ephemeral UDP port."""
@@ -64,6 +72,70 @@ def _build_ffmpeg_audio_args(stream) -> list:
     if stream.audio_codec == "copy":
         return ["-c:a", "copy"]
     return ["-c:a", stream.audio_codec, "-b:a", stream.audio_bitrate, "-ar", "48000"]
+
+
+def _build_ffmpeg_multi_quality_args(stream, hls_dir: str, url: str, qualities: list[str]) -> list:
+    """Build ffmpeg args for multi-quality ABR HLS output using filter_complex split+scale."""
+    ff_bin = FFMPEG7 if os.path.exists(FFMPEG7) else FFMPEG
+    n = len(qualities)
+
+    # filter_complex: split input video into N copies and scale each
+    splits = "".join(f"[v{i}]" for i in range(n))
+    scales = "; ".join(
+        f"[v{i}]scale={_QUALITY_PRESETS[q]['scale']}[v{i}out]"
+        for i, q in enumerate(qualities)
+    )
+    fc = f"[0:v]split={n}{splits}; {scales}"
+
+    args = [
+        ff_bin, "-hide_banner",
+        "-fflags",      "+genpts+discardcorrupt",
+        "-err_detect",  "ignore_err",
+        "-analyzeduration", "3000000",
+        "-probesize",       "5000000",
+        "-reconnect",           "1",
+        "-reconnect_at_eof",    "1",
+        "-reconnect_streamed",  "1",
+        "-reconnect_delay_max", "5",
+    ]
+    if stream.user_agent:
+        args += ["-user_agent", stream.user_agent]
+    args += ["-i", url, "-filter_complex", fc]
+
+    # Map: video_i, audio for each quality
+    for i in range(n):
+        args += ["-map", f"[v{i}out]", "-map", "0:a:0?"]
+
+    # Video encoding — libx264 (copy can't scale)
+    preset = stream.video_preset if stream.video_codec != "copy" else "ultrafast"
+    args += ["-c:v", "libx264", "-preset", preset]
+    for i, q in enumerate(qualities):
+        vbr = _QUALITY_PRESETS[q]["vbr"]
+        bufsize = str(int(vbr.replace("k", "")) * 2) + "k"
+        args += [f"-b:v:{i}", vbr, f"-maxrate:v:{i}", vbr, f"-bufsize:v:{i}", bufsize]
+
+    # Audio encoding
+    args += ["-c:a", "aac"]
+    for i, q in enumerate(qualities):
+        args += [f"-b:a:{i}", _QUALITY_PRESETS[q]["abr"], f"-ar:a:{i}", "48000"]
+
+    # Create subdirectories
+    for q in qualities:
+        os.makedirs(os.path.join(hls_dir, q), exist_ok=True)
+
+    # var_stream_map uses quality names so %v → e.g. "720p"
+    vsm = " ".join(f"v:{i},a:{i},name:{q}" for i, q in enumerate(qualities))
+    args += [
+        "-var_stream_map", vsm,
+        "-master_pl_name", "stream.m3u8",
+        "-f", "hls",
+        "-hls_time",      str(stream.hls_time),
+        "-hls_list_size", str(stream.hls_list_size),
+        "-hls_flags",     "append_list+independent_segments",
+        "-hls_segment_filename", os.path.join(hls_dir, "%v", "seg%05d.ts"),
+        os.path.join(hls_dir, "%v", "stream.m3u8"),
+    ]
+    return args
 
 
 class HLSManager:
@@ -268,53 +340,54 @@ class HLSManager:
         sid      = _safe_id(stream.id)
         playlist = os.path.join(hls_dir, "stream.m3u8")
 
-        # Choose ffmpeg binary
-        ff_bin = FFMPEG7 if os.path.exists(FFMPEG7) else FFMPEG
-
-        ff_args = [
-            ff_bin, "-hide_banner",
-            "-fflags",      "+genpts+discardcorrupt",
-            "-err_detect",  "ignore_err",
-            "-analyzeduration", "3000000",
-            "-probesize",       "5000000",
-            # Reconnect options — essential for live HLS streams
-            "-reconnect",            "1",
-            "-reconnect_at_eof",     "1",
-            "-reconnect_streamed",   "1",
-            "-reconnect_delay_max",  "5",
-        ]
-        # User-Agent must come before -i (HTTP input option)
-        if stream.user_agent:
-            ff_args += ["-user_agent", stream.user_agent]
-
-        ff_args += ["-i", url]   # use the rotated URL
-        ff_args += ["-map", "0:v:0?", "-map", "0:a:0?"]
-        ff_args += _build_ffmpeg_video_args(stream)
-        ff_args += _build_ffmpeg_audio_args(stream)
-
-        hls_out = (
-            f"[f=hls:hls_time={stream.hls_time}:hls_list_size={stream.hls_list_size}"
-            f":hls_flags=append_list"
-            f":hls_segment_filename={os.path.join(hls_dir, 'seg%05d.ts')}]{playlist}"
-        )
-
-        extra_outputs = []
-        if stream.output_rtmp:
-            extra_outputs.append(f"[f=flv]{stream.output_rtmp}")
-        if stream.output_udp:
-            extra_outputs.append(f"[f=mpegts]{stream.output_udp}")
-
-        if extra_outputs:
-            ff_args += ["-f", "tee", "|".join([hls_out] + extra_outputs)]
+        # Multi-quality ABR mode
+        qualities = [q.strip() for q in (stream.output_qualities or "").split(",") if q.strip()]
+        if qualities:
+            ff_args = _build_ffmpeg_multi_quality_args(stream, hls_dir, url, qualities)
         else:
-            ff_args += [
-                "-f", "hls",
-                "-hls_time",         str(stream.hls_time),
-                "-hls_list_size",    str(stream.hls_list_size),
-                "-hls_flags",        "append_list",
-                "-hls_segment_filename", os.path.join(hls_dir, "seg%05d.ts"),
-                playlist,
+            # Single-quality mode
+            ff_bin = FFMPEG7 if os.path.exists(FFMPEG7) else FFMPEG
+
+            ff_args = [
+                ff_bin, "-hide_banner",
+                "-fflags",      "+genpts+discardcorrupt",
+                "-err_detect",  "ignore_err",
+                "-analyzeduration", "3000000",
+                "-probesize",       "5000000",
+                "-reconnect",            "1",
+                "-reconnect_at_eof",     "1",
+                "-reconnect_streamed",   "1",
+                "-reconnect_delay_max",  "5",
             ]
+            if stream.user_agent:
+                ff_args += ["-user_agent", stream.user_agent]
+            ff_args += ["-i", url]
+            ff_args += ["-map", "0:v:0?", "-map", "0:a:0?"]
+            ff_args += _build_ffmpeg_video_args(stream)
+            ff_args += _build_ffmpeg_audio_args(stream)
+
+            hls_out = (
+                f"[f=hls:hls_time={stream.hls_time}:hls_list_size={stream.hls_list_size}"
+                f":hls_flags=append_list"
+                f":hls_segment_filename={os.path.join(hls_dir, 'seg%05d.ts')}]{playlist}"
+            )
+            extra_outputs = []
+            if stream.output_rtmp:
+                extra_outputs.append(f"[f=flv]{stream.output_rtmp}")
+            if stream.output_udp:
+                extra_outputs.append(f"[f=mpegts]{stream.output_udp}")
+
+            if extra_outputs:
+                ff_args += ["-f", "tee", "|".join([hls_out] + extra_outputs)]
+            else:
+                ff_args += [
+                    "-f", "hls",
+                    "-hls_time",         str(stream.hls_time),
+                    "-hls_list_size",    str(stream.hls_list_size),
+                    "-hls_flags",        "append_list",
+                    "-hls_segment_filename", os.path.join(hls_dir, "seg%05d.ts"),
+                    playlist,
+                ]
 
         # Build env: inject proxy vars (works for all protocols via ffmpeg's libavformat)
         env = os.environ.copy()

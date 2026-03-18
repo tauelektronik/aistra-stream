@@ -15,6 +15,7 @@ interface Stream {
   hls_time: number; hls_list_size: number; buffer_seconds: number
   output_rtmp?: string; output_udp?: string
   proxy?: string; user_agent?: string; backup_urls?: string
+  output_qualities?: string
   enabled: boolean; status: string
   created_at: string; updated_at: string
 }
@@ -27,6 +28,7 @@ const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
   hls_time:4, hls_list_size:30, buffer_seconds:20,
   output_rtmp:'', output_udp:'',
   proxy:'', user_agent:'', backup_urls:'',
+  output_qualities:'',
   enabled:true,
 }
 
@@ -246,6 +248,44 @@ function StreamModal({ stream, onSave, onClose }: {
                 ['h264_nvenc','h264_nvenc (GPU NVIDIA)'],
               ]} />
             </Row>
+
+            {/* ─── Qualidades de saída / ABR ─────────────────────────────── */}
+            {form.video_codec !== 'copy' && (
+              <Row label="Qualidades de saída / ABR"
+                   hint="Selecione 1 qualidade para saída fixa ou múltiplas para HLS adaptativo (ABR)">
+                <div style={{ display:'flex', gap:20, flexWrap:'wrap', padding:'6px 0' }}>
+                  {([
+                    { q:'1080p', vbr:'4500k', res:'1920×1080' },
+                    { q:'720p',  vbr:'2800k', res:'1280×720'  },
+                    { q:'480p',  vbr:'1400k', res:'854×480'   },
+                    { q:'360p',  vbr:'800k',  res:'640×360'   },
+                  ] as const).map(({ q, vbr, res }) => {
+                    const sel = (form.output_qualities||'').split(',').filter(Boolean)
+                    const checked = sel.includes(q)
+                    const ORDER = ['1080p','720p','480p','360p']
+                    return (
+                      <label key={q} style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
+                        <input type="checkbox" checked={checked} style={{ width:'auto', accentColor:'var(--accent)' }}
+                          onChange={e => {
+                            let qs = sel.filter(x => x !== q)
+                            if (e.target.checked) qs = [...qs, q]
+                            qs = ORDER.filter(x => qs.includes(x))
+                            set('output_qualities', qs.join(','))
+                          }} />
+                        <span style={{ fontWeight:600, fontSize:13 }}>{q}</span>
+                        <span style={{ color:'var(--text3)', fontSize:11 }}>{res} · {vbr}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+                {!form.output_qualities && (
+                  <span style={{ fontSize:11, color:'var(--text3)' }}>
+                    Nenhuma selecionada → usa configuração de resolução abaixo
+                  </span>
+                )}
+              </Row>
+            )}
+
             {form.video_codec !== 'copy' && <>
               <Row label="Preset (velocidade × qualidade)" hint="Mais rápido = menos CPU, menor qualidade">
                 <Sel form={form} set={set} k="video_preset" opts={[
@@ -253,17 +293,20 @@ function StreamModal({ stream, onSave, onClose }: {
                   ['faster','faster'],['fast','fast'],['medium','medium'],
                 ]} />
               </Row>
-              <Row label={`CRF: ${form.video_crf} — qualidade (menor = melhor)`}>
-                <Num form={form} set={set} k="video_crf" min={0} max={51} />
-              </Row>
-              <Row label="Resolução">
-                <Sel form={form} set={set} k="video_resolution" opts={[
-                  ['original','Original'],['1920x1080','1080p'],['1280x720','720p'],['854x480','480p'],
-                ]} />
-              </Row>
-              <Row label="Bitrate máximo (opcional)" hint='Ex: "4000k" ou deixe vazio para sem limite'>
-                <input value={form.video_maxrate||''} onChange={e => set('video_maxrate', e.target.value)} placeholder="4000k" />
-              </Row>
+              {/* CRF e Resolução — apenas no modo qualidade única */}
+              {!form.output_qualities && <>
+                <Row label={`CRF: ${form.video_crf} — qualidade (menor = melhor)`}>
+                  <Num form={form} set={set} k="video_crf" min={0} max={51} />
+                </Row>
+                <Row label="Resolução">
+                  <Sel form={form} set={set} k="video_resolution" opts={[
+                    ['original','Original'],['1920x1080','1080p'],['1280x720','720p'],['854x480','480p'],
+                  ]} />
+                </Row>
+                <Row label="Bitrate máximo (opcional)" hint='Ex: "4000k" ou deixe vazio para sem limite'>
+                  <input value={form.video_maxrate||''} onChange={e => set('video_maxrate', e.target.value)} placeholder="4000k" />
+                </Row>
+              </>}
             </>}
           </>}
 

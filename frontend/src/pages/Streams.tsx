@@ -13,6 +13,7 @@ interface Stream {
   video_maxrate: string; video_resolution: string
   audio_codec: string; audio_bitrate: string
   hls_time: number; hls_list_size: number; buffer_seconds: number
+  output_rtmp?: string; output_udp?: string
   enabled: boolean; status: string
   created_at: string; updated_at: string
 }

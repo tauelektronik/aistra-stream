@@ -1,61 +1,276 @@
 #!/usr/bin/env bash
-# aistra-stream — Install script (Ubuntu 22.04 / 24.04)
+# ═══════════════════════════════════════════════════════════════
+#  aistra-stream — Universal Linux Install Script
+#  Suporta: Ubuntu/Debian · CentOS/RHEL/AlmaLinux/Rocky · Fedora · Arch
+# ═══════════════════════════════════════════════════════════════
 set -e
 
 PROJECT_DIR="/opt/aistra-stream"
-SERVICE_USER="root"
+PORT=8001
+DB_NAME="aistra_stream"
+DB_USER="aistra"
+DB_PASS="aistra123"
 
-echo "=== aistra-stream install ==="
+# ── Cores ─────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+ok()   { echo -e "${GREEN}[OK]${NC} $*"; }
+info() { echo -e "${CYAN}[..] $*${NC}"; }
+warn() { echo -e "${YELLOW}[AV] $*${NC}"; }
+err()  { echo -e "${RED}[ERRO] $*${NC}"; exit 1; }
 
-# ── 1. Dependencies ───────────────────────────────────────────────────────────
-apt-get update -qq
-apt-get install -y python3 python3-pip python3-venv nodejs npm mariadb-server curl
+echo -e "${BOLD}${CYAN}"
+echo "  ╔═══════════════════════════════════╗"
+echo "  ║     aistra-stream installer       ║"
+echo "  ╚═══════════════════════════════════╝"
+echo -e "${NC}"
 
-# ── 2. MariaDB setup ──────────────────────────────────────────────────────────
-echo "Configurando MariaDB..."
-systemctl enable --now mariadb
-mysql -e "CREATE DATABASE IF NOT EXISTS aistra_stream CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-mysql -e "CREATE USER IF NOT EXISTS 'aistra'@'localhost' IDENTIFIED BY 'aistra123';"
-mysql -e "GRANT ALL PRIVILEGES ON aistra_stream.* TO 'aistra'@'localhost'; FLUSH PRIVILEGES;"
+# ── Root check ────────────────────────────────────────────────
+[ "$(id -u)" -eq 0 ] || err "Execute como root: sudo bash install.sh"
 
-# ── 3. Copy project files ─────────────────────────────────────────────────────
-echo "Copiando arquivos para $PROJECT_DIR..."
-mkdir -p "$PROJECT_DIR"
-cp -r . "$PROJECT_DIR/"
-cd "$PROJECT_DIR"
+# ── Detectar distro ───────────────────────────────────────────
+detect_distro() {
+    if   [ -f /etc/os-release ]; then . /etc/os-release; DISTRO_ID="${ID}"; DISTRO_LIKE="${ID_LIKE:-}"
+    elif [ -f /etc/redhat-release ]; then DISTRO_ID="rhel"
+    elif [ -f /etc/arch-release ];   then DISTRO_ID="arch"
+    else err "Distribuição Linux não reconhecida"
+    fi
 
-# ── 4. Backend venv ───────────────────────────────────────────────────────────
-echo "Instalando dependências Python..."
-python3 -m venv venv
-./venv/bin/pip install -q --upgrade pip
-./venv/bin/pip install -q -r backend/requirements.txt
+    case "$DISTRO_ID" in
+        ubuntu|debian|linuxmint|pop|elementary|kali)
+            PKG_MGR="apt"; FAMILY="debian" ;;
+        centos|rhel|almalinux|rocky|ol|amzn)
+            PKG_MGR="dnf"; FAMILY="rhel"
+            command -v dnf &>/dev/null || PKG_MGR="yum" ;;
+        fedora)
+            PKG_MGR="dnf"; FAMILY="fedora" ;;
+        arch|manjaro|endeavouros)
+            PKG_MGR="pacman"; FAMILY="arch" ;;
+        *)
+            # Tenta via ID_LIKE
+            case "$DISTRO_LIKE" in
+                *debian*|*ubuntu*) PKG_MGR="apt";    FAMILY="debian" ;;
+                *rhel*|*fedora*)   PKG_MGR="dnf";    FAMILY="rhel"   ;;
+                *arch*)            PKG_MGR="pacman";  FAMILY="arch"   ;;
+                *) err "Distro não suportada: $DISTRO_ID (ID_LIKE=$DISTRO_LIKE)" ;;
+            esac ;;
+    esac
+    ok "Distro: ${DISTRO_ID} (família ${FAMILY}, gerenciador ${PKG_MGR})"
+}
 
-# ── 5. .env ───────────────────────────────────────────────────────────────────
-if [ ! -f .env ]; then
-    cp .env.example .env
-    SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-    sed -i "s/change-me-to-a-long-random-string/$SECRET/" .env
-    echo "Arquivo .env criado. Revise as configurações em $PROJECT_DIR/.env"
-fi
+# ── Instalar pacotes do sistema ───────────────────────────────
+install_system_deps() {
+    info "Atualizando repositórios e instalando dependências..."
 
-# ── 6. Frontend build ─────────────────────────────────────────────────────────
-echo "Instalando e buildando frontend..."
-cd frontend
-npm install --silent
-npm run build
-cd ..
+    case "$FAMILY" in
+        debian)
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq \
+                curl wget git python3 python3-pip python3-venv \
+                nodejs npm ffmpeg mariadb-server \
+                build-essential libssl-dev unzip ;;
 
-# ── 7. Systemd service ────────────────────────────────────────────────────────
-cat > /etc/systemd/system/aistra-stream.service <<EOF
+        rhel)
+            # EPEL + RPM Fusion para ffmpeg
+            $PKG_MGR install -y epel-release 2>/dev/null || true
+            $PKG_MGR install -y \
+                https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-$(rpm -E %rhel).noarch.rpm \
+                2>/dev/null || true
+            $PKG_MGR install -y \
+                curl wget git python3 python3-pip \
+                nodejs npm ffmpeg mariadb-server \
+                gcc openssl-devel unzip ;;
+
+        fedora)
+            dnf install -y \
+                https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
+                2>/dev/null || true
+            dnf install -y \
+                curl wget git python3 python3-pip \
+                nodejs npm ffmpeg mariadb mariadb-server \
+                gcc openssl-devel unzip ;;
+
+        arch)
+            pacman -Sy --noconfirm \
+                curl wget git python python-pip \
+                nodejs npm ffmpeg mariadb \
+                base-devel unzip ;;
+    esac
+    ok "Dependências do sistema instaladas"
+}
+
+# ── Node.js: garantir versão ≥ 18 ────────────────────────────
+ensure_node() {
+    local ver
+    ver=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1 || echo 0)
+    if [ "$ver" -lt 18 ]; then
+        info "Node.js $ver < 18 — instalando Node 20 via NodeSource..."
+        case "$FAMILY" in
+            debian)
+                curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+                apt-get install -y nodejs ;;
+            rhel|fedora)
+                curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+                $PKG_MGR install -y nodejs ;;
+            arch)
+                pacman -S --noconfirm nodejs-lts-iron npm ;;
+        esac
+    fi
+    ok "Node.js $(node --version)"
+}
+
+# ── MariaDB / MySQL ───────────────────────────────────────────
+setup_database() {
+    info "Configurando banco de dados MariaDB..."
+
+    # Determinar serviço correto
+    local svc="mariadb"
+    systemctl list-unit-files mariadb.service &>/dev/null || svc="mysqld"
+
+    systemctl enable --now "$svc" 2>/dev/null || true
+
+    # Aguardar socket
+    local timeout=30
+    while ! mysqladmin ping --silent 2>/dev/null; do
+        sleep 1; timeout=$((timeout-1))
+        [ $timeout -gt 0 ] || err "MariaDB não iniciou em 30s"
+    done
+
+    mysql -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null
+    mysql -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';" 2>/dev/null
+    mysql -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost'; FLUSH PRIVILEGES;" 2>/dev/null
+    ok "Banco '${DB_NAME}' criado, usuário '${DB_USER}' configurado"
+}
+
+# ── ffmpeg: verificar versão ──────────────────────────────────
+check_ffmpeg() {
+    if command -v ffmpeg &>/dev/null; then
+        ok "ffmpeg $(ffmpeg -version 2>&1 | head -1 | awk '{print $3}')"
+    else
+        warn "ffmpeg não encontrado — tentando instalar manualmente..."
+        # Fallback: baixar binário estático
+        local ARCH; ARCH=$(uname -m)
+        local FF_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz"
+        curl -L "$FF_URL" -o /tmp/ffmpeg.tar.xz
+        tar xf /tmp/ffmpeg.tar.xz -C /tmp
+        cp /tmp/ffmpeg-*-static/ffmpeg /usr/local/bin/ffmpeg
+        cp /tmp/ffmpeg-*-static/ffprobe /usr/local/bin/ffprobe
+        chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
+        rm -rf /tmp/ffmpeg*
+        ok "ffmpeg instalado em /usr/local/bin/ffmpeg (binário estático)"
+    fi
+}
+
+# ── n_m3u8dl-RE ───────────────────────────────────────────────
+install_n_m3u8dl() {
+    if command -v n_m3u8dl &>/dev/null; then
+        ok "n_m3u8dl já instalado: $(n_m3u8dl --version 2>&1 | head -1)"
+        return
+    fi
+    info "Instalando N_m3u8DL-RE (CENC/DRM downloader)..."
+    local ARCH; ARCH=$(uname -m)
+    local TAG
+    TAG=$(curl -s https://api.github.com/repos/nilaoda/N_m3u8DL-RE/releases/latest \
+          | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\(.*\)".*/\1/')
+    [ -n "$TAG" ] || { warn "Não foi possível obter versão do n_m3u8dl — pulando"; return; }
+
+    local FNAME
+    case "$ARCH" in
+        x86_64)  FNAME="N_m3u8DL-RE_${TAG}_linux-x64_v2.tar.gz" ;;
+        aarch64) FNAME="N_m3u8DL-RE_${TAG}_linux-arm64_v2.tar.gz" ;;
+        *)       warn "Arquitetura $ARCH não suportada para n_m3u8dl — baixe manualmente"; return ;;
+    esac
+
+    local URL="https://github.com/nilaoda/N_m3u8DL-RE/releases/download/${TAG}/${FNAME}"
+    curl -L "$URL" -o /tmp/n_m3u8dl.tar.gz 2>/dev/null \
+        || { warn "Download falhou — verifique manualmente"; return; }
+
+    tar xf /tmp/n_m3u8dl.tar.gz -C /tmp 2>/dev/null || true
+    find /tmp -name "N_m3u8DL-RE" -type f -exec cp {} /usr/local/bin/n_m3u8dl \; 2>/dev/null || true
+    chmod +x /usr/local/bin/n_m3u8dl 2>/dev/null || true
+    rm -f /tmp/n_m3u8dl.tar.gz
+    ok "n_m3u8dl instalado em /usr/local/bin/n_m3u8dl"
+}
+
+# ── yt-dlp ────────────────────────────────────────────────────
+install_ytdlp() {
+    info "Instalando yt-dlp..."
+    curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+         -o /usr/local/bin/yt-dlp 2>/dev/null
+    chmod +x /usr/local/bin/yt-dlp
+    ok "yt-dlp $(yt-dlp --version 2>/dev/null)"
+}
+
+# ── Copiar projeto ────────────────────────────────────────────
+deploy_project() {
+    info "Copiando projeto para ${PROJECT_DIR}..."
+    mkdir -p "$PROJECT_DIR"
+    # Se estiver rodando de dentro do clone, não copiar pra cima
+    local SRC; SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ "$SRC" != "$PROJECT_DIR" ]; then
+        cp -r "$SRC/." "$PROJECT_DIR/"
+    fi
+    cd "$PROJECT_DIR"
+    ok "Projeto em ${PROJECT_DIR}"
+}
+
+# ── Python venv + deps ────────────────────────────────────────
+setup_python() {
+    info "Criando ambiente Python..."
+    cd "$PROJECT_DIR"
+
+    # Garantir python3 com venv
+    python3 -m venv venv
+    ./venv/bin/pip install -q --upgrade pip
+    ./venv/bin/pip install -q -r backend/requirements.txt
+    ok "Dependências Python instaladas"
+}
+
+# ── .env ─────────────────────────────────────────────────────
+create_env() {
+    cd "$PROJECT_DIR"
+    if [ ! -f .env ]; then
+        cp .env.example .env
+        local SECRET
+        SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+        sed -i "s/change-me-to-a-long-random-string/$SECRET/" .env
+        sed -i "s|mysql+aiomysql://aistra:aistra123@localhost:3306/aistra_stream|mysql+aiomysql://${DB_USER}:${DB_PASS}@localhost:3306/${DB_NAME}|" .env
+
+        # Detectar caminhos dos binários
+        FFMPEG_PATH=$(command -v ffmpeg || echo "/usr/bin/ffmpeg")
+        N_M3U8DL_PATH=$(command -v n_m3u8dl || echo "/usr/local/bin/n_m3u8dl")
+        sed -i "s|N_M3U8DL=.*|N_M3U8DL=${N_M3U8DL_PATH}|" .env
+        sed -i "s|FFMPEG=.*|FFMPEG=${FFMPEG_PATH}|" .env
+        ok "Arquivo .env criado"
+    else
+        warn ".env já existe — mantendo configuração atual"
+    fi
+}
+
+# ── Frontend build ─────────────────────────────────────────────
+build_frontend() {
+    info "Instalando dependências e buildando frontend React..."
+    cd "$PROJECT_DIR/frontend"
+    npm install --silent
+    npm run build
+    ok "Frontend buildado em frontend/dist/"
+}
+
+# ── Systemd service ───────────────────────────────────────────
+install_service() {
+    info "Criando serviço systemd..."
+    cat > /etc/systemd/system/aistra-stream.service <<EOF
 [Unit]
 Description=Aistra Stream Panel
-After=network.target mariadb.service
+After=network.target mariadb.service mysqld.service
+Wants=mariadb.service
 
 [Service]
 Type=simple
-WorkingDirectory=$PROJECT_DIR
-EnvironmentFile=$PROJECT_DIR/.env
-ExecStart=$PROJECT_DIR/venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8001
+WorkingDirectory=${PROJECT_DIR}
+EnvironmentFile=${PROJECT_DIR}/.env
+ExecStart=${PROJECT_DIR}/venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port ${PORT}
 Restart=always
 RestartSec=5
 StandardOutput=append:/var/log/aistra-stream.log
@@ -65,14 +280,72 @@ StandardError=append:/var/log/aistra-stream.log
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable --now aistra-stream
+    systemctl daemon-reload
+    systemctl enable aistra-stream
+    systemctl restart aistra-stream
+    sleep 3
 
-echo ""
-echo "=== Instalação concluída! ==="
-echo ""
-echo "  Painel: http://$(hostname -I | awk '{print $1}'):8001"
-echo "  Login:  admin / admin123"
-echo ""
-echo "  IMPORTANTE: troque a senha padrão após o primeiro acesso!"
-echo "  Logs: journalctl -u aistra-stream -f"
+    if systemctl is-active --quiet aistra-stream; then
+        ok "Serviço aistra-stream ativo"
+    else
+        warn "Serviço não iniciou — verificando logs..."
+        journalctl -u aistra-stream -n 20 --no-pager
+    fi
+}
+
+# ── Firewall (se ativo) ───────────────────────────────────────
+open_firewall() {
+    if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
+        ufw allow "$PORT/tcp" &>/dev/null
+        ok "Porta $PORT liberada no ufw"
+    elif command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
+        firewall-cmd --permanent --add-port="${PORT}/tcp" &>/dev/null
+        firewall-cmd --reload &>/dev/null
+        ok "Porta $PORT liberada no firewalld"
+    fi
+}
+
+# ── Resumo ────────────────────────────────────────────────────
+print_summary() {
+    local IP
+    IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
+    echo ""
+    echo -e "${BOLD}${GREEN}═══════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${GREEN}  Instalação concluída com sucesso!${NC}"
+    echo -e "${BOLD}${GREEN}═══════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  ${BOLD}Painel:${NC}  http://${IP}:${PORT}"
+    echo -e "  ${BOLD}Login:${NC}   admin / admin123"
+    echo ""
+    echo -e "  ${BOLD}${RED}IMPORTANTE: Troque a senha padrão!${NC}"
+    echo ""
+    echo -e "  ${BOLD}Comandos úteis:${NC}"
+    echo "    Logs em tempo real: journalctl -u aistra-stream -f"
+    echo "    Reiniciar:          systemctl restart aistra-stream"
+    echo "    Parar:              systemctl stop aistra-stream"
+    echo "    Atualizar:          cd ${PROJECT_DIR} && git pull && systemctl restart aistra-stream"
+    echo ""
+    echo -e "  ${BOLD}Binários detectados:${NC}"
+    echo "    ffmpeg:    $(command -v ffmpeg 2>/dev/null || echo 'não encontrado')"
+    echo "    n_m3u8dl:  $(command -v n_m3u8dl 2>/dev/null || echo 'não encontrado')"
+    echo "    yt-dlp:    $(command -v yt-dlp 2>/dev/null || echo 'não encontrado')"
+    echo ""
+}
+
+# ══════════════════════════════════════════════════
+#  EXECUÇÃO
+# ══════════════════════════════════════════════════
+detect_distro
+install_system_deps
+ensure_node
+check_ffmpeg
+install_n_m3u8dl
+install_ytdlp
+setup_database
+deploy_project
+setup_python
+create_env
+build_frontend
+install_service
+open_firewall
+print_summary

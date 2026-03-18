@@ -14,6 +14,7 @@ interface Stream {
   audio_codec: string; audio_bitrate: string
   hls_time: number; hls_list_size: number; buffer_seconds: number
   output_rtmp?: string; output_udp?: string
+  proxy?: string; user_agent?: string; backup_urls?: string
   enabled: boolean; status: string
   created_at: string; updated_at: string
 }
@@ -24,7 +25,9 @@ const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
   video_crf:26, video_maxrate:'', video_resolution:'original',
   audio_codec:'aac', audio_bitrate:'128k',
   hls_time:4, hls_list_size:30, buffer_seconds:20,
-  output_rtmp:'', output_udp:'', enabled:true,
+  output_rtmp:'', output_udp:'',
+  proxy:'', user_agent:'', backup_urls:'',
+  enabled:true,
 }
 
 // ─── Player component ─────────────────────────────────────────────────────────
@@ -207,6 +210,31 @@ function StreamModal({ stream, onSave, onClose }: {
             <div style={{ display:'flex', alignItems:'center', gap:10 }}>
               <input type="checkbox" id="enabled" checked={form.enabled} onChange={e => set('enabled', e.target.checked)} style={{ width:'auto' }} />
               <label htmlFor="enabled" style={{ fontSize:13, color:'var(--text2)', cursor:'pointer' }}>Stream ativo</label>
+            </div>
+
+            {/* ─── Rede / Proxy ────────────────────────────────────────────── */}
+            <div style={{ marginTop:8, borderTop:'1px solid var(--border)', paddingTop:16 }}>
+              <div style={{ fontSize:11, fontWeight:600, color:'var(--text3)', marginBottom:12,
+                            textTransform:'uppercase', letterSpacing:'0.05em' }}>
+                Rede / Proxy
+              </div>
+              <Row label="Proxy" hint="http://, https://, socks4://, socks5:// — ex: http://user:pass@host:3128">
+                <input value={form.proxy||''} onChange={e => set('proxy', e.target.value)}
+                       placeholder="http://proxy:3128" />
+              </Row>
+              <Row label="User-Agent" hint="Deixe vazio para usar o padrão">
+                <input value={form.user_agent||''} onChange={e => set('user_agent', e.target.value)}
+                       placeholder="Mozilla/5.0 ..." />
+              </Row>
+              <Row label="URLs de Backup / Balance" hint="Uma URL por linha — rodízio automático em caso de falha">
+                <textarea
+                  rows={4}
+                  value={form.backup_urls||''}
+                  onChange={e => set('backup_urls', e.target.value)}
+                  placeholder={'https://cdn2.example.com/live.m3u8\nhttps://cdn3.example.com/live.m3u8'}
+                  style={{ fontFamily:'monospace', fontSize:12, resize:'vertical' }}
+                />
+              </Row>
             </div>
           </>}
 

@@ -42,6 +42,7 @@ class UserUpdate(BaseModel):
 # ── Validators ────────────────────────────────────────────────────────────────
 
 _ALLOWED_SCHEMES = {"http", "https", "rtmp", "rtmps", "rtsp", "rtsps", "udp", "rtp", "srt"}
+_PROXY_SCHEMES   = {"http", "https", "socks4", "socks5"}
 _HEX_RE = re.compile(r'^[0-9a-fA-F]+$')
 
 def _validate_stream_url(v: Optional[str]) -> Optional[str]:
@@ -94,6 +95,35 @@ def _validate_udp(v: Optional[str]) -> Optional[str]:
         raise ValueError("Saída UDP deve começar com udp://, rtp:// ou srt://")
     return v
 
+def _validate_proxy(v: Optional[str]) -> Optional[str]:
+    if not v:
+        return v
+    if len(v) > 500:
+        raise ValueError("Proxy URL muito longa (máx 500 caracteres)")
+    try:
+        parsed = urlparse(v)
+        if parsed.scheme.lower() not in _PROXY_SCHEMES:
+            raise ValueError(
+                f"Protocolo de proxy não permitido: '{parsed.scheme}'. "
+                f"Use: {', '.join(sorted(_PROXY_SCHEMES))}"
+            )
+        if not parsed.hostname:
+            raise ValueError("Proxy deve ter um hostname")
+    except ValueError:
+        raise
+    except Exception:
+        raise ValueError("Proxy URL inválida")
+    return v
+
+def _validate_backup_urls(v: Optional[str]) -> Optional[str]:
+    if not v:
+        return v
+    for line in v.splitlines():
+        line = line.strip()
+        if line:
+            _validate_stream_url(line)
+    return v
+
 
 # ── Streams ───────────────────────────────────────────────────────────────────
 
@@ -117,6 +147,9 @@ class StreamBase(BaseModel):
     buffer_seconds:   int = Field(20, ge=5, le=120)
     output_rtmp:      Optional[str] = None
     output_udp:       Optional[str] = None
+    proxy:            Optional[str] = None   # http://user:pass@host:port or socks5://host:port
+    user_agent:       Optional[str] = None   # custom User-Agent header
+    backup_urls:      Optional[str] = None   # newline-separated fallback URLs (failover/balance)
     enabled:          bool = True
 
     @field_validator("url")
@@ -134,6 +167,21 @@ class StreamBase(BaseModel):
     @field_validator("output_udp")
     @classmethod
     def check_udp(cls, v): return _validate_udp(v)
+
+    @field_validator("proxy")
+    @classmethod
+    def check_proxy(cls, v): return _validate_proxy(v)
+
+    @field_validator("user_agent")
+    @classmethod
+    def check_user_agent(cls, v):
+        if v and len(v) > 500:
+            raise ValueError("User-Agent muito longo (máx 500 caracteres)")
+        return v
+
+    @field_validator("backup_urls")
+    @classmethod
+    def check_backup_urls(cls, v): return _validate_backup_urls(v)
 
 class StreamCreate(StreamBase):
     id: str = Field(..., min_length=2, max_length=50, pattern=r'^[a-zA-Z0-9_-]+$')

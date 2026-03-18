@@ -69,6 +69,7 @@ def _build_ffmpeg_audio_args(stream) -> list:
 class HLSManager:
     def __init__(self):
         self._sessions: dict = {}   # stream_id → session dict
+        self._url_idx:  dict = {}   # stream_id → current URL index (failover/balance)
         self._lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
 
@@ -81,6 +82,7 @@ class HLSManager:
 
     async def stop_session(self, stream_id: str):
         async with self._lock:
+            self._url_idx.pop(stream_id, None)   # reset failover index on explicit stop
             await self._kill_session(stream_id)
 
     async def get_status(self, stream_id: str) -> str:
@@ -90,6 +92,17 @@ class HLSManager:
         if sess["proc"].returncode is None:
             return "running"
         return "error"
+
+    def _get_active_url(self, stream) -> tuple[str, list]:
+        """Return (active_url, all_urls) using round-robin index from backup_urls."""
+        urls = [stream.url]
+        if stream.backup_urls:
+            for u in stream.backup_urls.splitlines():
+                u = u.strip()
+                if u and u not in urls:
+                    urls.append(u)
+        idx = self._url_idx.get(stream.id, 0) % len(urls)
+        return urls[idx], urls
 
     async def get_hls_dir(self, stream, force_restart: bool = False) -> tuple[str, Optional[str]]:
         """Return (hls_dir, error). Starts or reuses a session."""
@@ -101,20 +114,25 @@ class HLSManager:
                 if sess["proc"].returncode is None:
                     sess["last_touch"] = asyncio.get_event_loop().time()
                     return sess["hls_dir"], None
-                # Process died — clean up before restarting
+                # Process died — advance URL index (failover) before restarting
+                _, urls = self._get_active_url(stream)
+                self._url_idx[sid] = (self._url_idx.get(sid, 0) + 1) % len(urls)
+                logger.info("Stream %s: process died, rotating to URL index %d/%d",
+                            sid, self._url_idx[sid], len(urls))
                 await self._kill_session(sid)
 
             hls_dir = os.path.join(HLS_BASE, sid)
             os.makedirs(hls_dir, exist_ok=True)
 
+            active_url, _ = self._get_active_url(stream)
             is_cenc = (stream.drm_type == "cenc-ctr") and (
                 stream.drm_keys or (stream.drm_kid and stream.drm_key)
             )
             try:
                 if is_cenc:
-                    sess = await self._start_cenc_session(stream, hls_dir)
+                    sess = await self._start_cenc_session(stream, hls_dir, active_url)
                 else:
-                    sess = await self._start_http_session(stream, hls_dir)
+                    sess = await self._start_http_session(stream, hls_dir, active_url)
             except Exception as exc:
                 logger.error("HLS start failed for %s: %s", sid, exc)
                 return hls_dir, str(exc)
@@ -151,7 +169,7 @@ class HLSManager:
 
     # ── CENC pipeline: n_m3u8dl → FIFO → ffmpeg ──────────────────────────────
 
-    async def _start_cenc_session(self, stream, hls_dir: str) -> dict:
+    async def _start_cenc_session(self, stream, hls_dir: str, url: str) -> dict:
         sid     = _safe_id(stream.id)
         os.makedirs(PIPE_BASE, exist_ok=True)
 
@@ -164,7 +182,7 @@ class HLSManager:
         shutil.rmtree(tmp_cwd, ignore_errors=True)
         os.makedirs(tmp_cwd, exist_ok=True)
 
-        clean_url = stream.url.split("#")[0]
+        clean_url = url.split("#")[0]   # use the rotated URL
 
         # Build --key args: support multi-key CDM format (drm_keys) and legacy single key
         key_pairs = []
@@ -188,6 +206,10 @@ class HLSManager:
         ]
         for kp in key_pairs:
             n_args += ["--key", kp]
+        if stream.user_agent:
+            n_args += ["--header", f"User-Agent:{stream.user_agent}"]
+        if stream.proxy:
+            n_args += ["--custom-proxy", stream.proxy]
         n_args += [
             "--decryption-binary-path", MP4DECRYPT,
             "--live-real-time-merge",
@@ -242,7 +264,7 @@ class HLSManager:
 
     # ── HTTP pipeline: ffmpeg direct ─────────────────────────────────────────
 
-    async def _start_http_session(self, stream, hls_dir: str) -> dict:
+    async def _start_http_session(self, stream, hls_dir: str, url: str) -> dict:
         sid      = _safe_id(stream.id)
         playlist = os.path.join(hls_dir, "stream.m3u8")
 
@@ -255,9 +277,13 @@ class HLSManager:
             "-err_detect",  "ignore_err",
             "-analyzeduration", "3000000",
             "-probesize",       "5000000",
-            "-i", stream.url,
-            "-map", "0:v:0?", "-map", "0:a:0?",
         ]
+        # User-Agent must come before -i (HTTP input option)
+        if stream.user_agent:
+            ff_args += ["-user_agent", stream.user_agent]
+
+        ff_args += ["-i", url]   # use the rotated URL
+        ff_args += ["-map", "0:v:0?", "-map", "0:a:0?"]
         ff_args += _build_ffmpeg_video_args(stream)
         ff_args += _build_ffmpeg_audio_args(stream)
 
@@ -285,12 +311,19 @@ class HLSManager:
                 playlist,
             ]
 
+        # Build env: inject proxy vars (works for all protocols via ffmpeg's libavformat)
+        env = os.environ.copy()
+        if stream.proxy:
+            for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+                env[key] = stream.proxy
+
         ff_log  = open(f"/tmp/ffmpeg_{sid}.log", "ab")
         ff_proc = await asyncio.create_subprocess_exec(
             *ff_args,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=ff_log,
+            env=env,
         )
 
         return {

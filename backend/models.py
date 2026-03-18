@@ -86,6 +86,11 @@ class Stream(Base):
     output_rtmp   : Mapped[str|None] = mapped_column(String(500), nullable=True)   # e.g. rtmp://live.twitch.tv/live/KEY
     output_udp    : Mapped[str|None] = mapped_column(String(200), nullable=True)   # e.g. udp://239.0.0.1:1234
 
+    # Proxy / network
+    proxy         : Mapped[str|None] = mapped_column(String(500), nullable=True)   # http://user:pass@host:port or socks5://
+    user_agent    : Mapped[str|None] = mapped_column(String(500), nullable=True)   # custom UA string
+    backup_urls   : Mapped[str|None] = mapped_column(Text, nullable=True)          # newline-separated fallback URLs (failover)
+
     # Metadata
     enabled       : Mapped[bool]     = mapped_column(Boolean, default=True)
     created_at    : Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

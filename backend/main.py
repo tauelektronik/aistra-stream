@@ -5,6 +5,7 @@ Streaming panel with MySQL auth, per-stream HLS delivery.
 import asyncio
 import logging
 import os
+import re
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager

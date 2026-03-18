@@ -47,6 +47,62 @@ def _safe_id(stream_id: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", stream_id)
 
 
+def _height_from_resolution(res: str) -> int:
+    """Return target height from resolution string, e.g. '1280x720' → 720. 0 = auto."""
+    if not res or res == "original":
+        return 0
+    try:
+        return int(res.split("x")[1])
+    except Exception:
+        return 0
+
+
+async def _resolve_hls_variant(url: str, target_height: int) -> str:
+    """
+    If *url* is an HLS master playlist, return the variant URL closest to
+    *target_height*. Falls back to *url* unchanged on any error or if the
+    response is already a variant/TS stream.
+    """
+    import urllib.request as _req
+    import urllib.parse   as _urlparse
+
+    def _fetch() -> str:
+        try:
+            req = _req.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with _req.urlopen(req, timeout=12) as resp:
+                final_url = resp.url          # URL after HTTP redirects
+                raw       = resp.read(65536)  # read first 64 KB — enough for any playlist
+            text = raw.decode("utf-8", errors="replace")
+            if "#EXTM3U" not in text or "#EXT-X-STREAM-INF" not in text:
+                return final_url   # already a variant playlist or not HLS
+
+            variants: list[tuple[int, str]] = []   # (height, abs_url)
+            lines = text.splitlines()
+            for i, line in enumerate(lines):
+                if line.startswith("#EXT-X-STREAM-INF:"):
+                    m = re.search(r"RESOLUTION=\d+x(\d+)", line)
+                    if m and i + 1 < len(lines):
+                        h      = int(m.group(1))
+                        rel    = lines[i + 1].strip()
+                        if rel and not rel.startswith("#"):
+                            variants.append((h, _urlparse.urljoin(final_url, rel)))
+
+            if not variants:
+                return final_url
+
+            variants.sort(key=lambda v: abs(v[0] - target_height))
+            chosen_h, chosen_url = variants[0]
+            logger.info("HLS variant selected: %dp (target %dp) from %d variants",
+                        chosen_h, target_height, len(variants))
+            return chosen_url
+        except Exception as exc:
+            logger.warning("HLS variant resolve failed (%s) — using original URL", exc)
+            return url
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _fetch)
+
+
 def _build_ffmpeg_video_args(stream) -> list:
     """Return ffmpeg video encoding arguments based on stream config."""
     codec = stream.video_codec
@@ -103,8 +159,9 @@ def _build_ffmpeg_multi_quality_args(stream, hls_dir: str, url: str, qualities: 
     args += ["-i", url, "-filter_complex", fc]
 
     # Map: video_i, audio for each quality
+    audio_idx = getattr(stream, "audio_track", 0)
     for i in range(n):
-        args += ["-map", f"[v{i}out]", "-map", "0:a:0?"]
+        args += ["-map", f"[v{i}out]", "-map", f"0:a:{audio_idx}?"]
 
     # Video encoding — libx264 (copy can't scale)
     preset = stream.video_preset if stream.video_codec != "copy" else "ultrafast"
@@ -307,7 +364,7 @@ class HLSManager:
             "-fflags", "+genpts+discardcorrupt",
             "-err_detect", "ignore_err",
             "-i", fifo_path,
-            "-map", "0:v:0?", "-map", "0:a:0?",
+            "-map", "0:v:0?", "-map", f"0:a:{stream.audio_track}?",
             "-c:v", "copy", "-c:a", "copy",
             "-f", "hls",
             "-hls_time",         str(stream.hls_time),
@@ -346,6 +403,13 @@ class HLSManager:
             ff_args = _build_ffmpeg_multi_quality_args(stream, hls_dir, url, qualities)
         else:
             # Single-quality mode
+            # For copy mode + explicit resolution: resolve the best HLS variant URL first
+            active_url = url
+            if stream.video_codec == "copy" and stream.video_resolution not in ("", "original"):
+                target_h = _height_from_resolution(stream.video_resolution)
+                if target_h:
+                    active_url = await _resolve_hls_variant(url, target_h)
+
             ff_bin = FFMPEG7 if os.path.exists(FFMPEG7) else FFMPEG
 
             ff_args = [
@@ -361,8 +425,8 @@ class HLSManager:
             ]
             if stream.user_agent:
                 ff_args += ["-user_agent", stream.user_agent]
-            ff_args += ["-i", url]
-            ff_args += ["-map", "0:v:0?", "-map", "0:a:0?"]
+            ff_args += ["-i", active_url]
+            ff_args += ["-map", "0:v:0?", "-map", f"0:a:{stream.audio_track}?"]
             ff_args += _build_ffmpeg_video_args(stream)
             ff_args += _build_ffmpeg_audio_args(stream)
 

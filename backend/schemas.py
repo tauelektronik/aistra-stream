@@ -148,6 +148,7 @@ class StreamBase(BaseModel):
     output_rtmp:      Optional[str] = None
     output_udp:       Optional[str] = None
     output_qualities: Optional[str] = None   # comma-separated ABR qualities, e.g. "1080p,720p,480p"
+    audio_track:      int = Field(0, ge=0, le=9)  # audio track index (0=first)
     proxy:            Optional[str] = None   # http://user:pass@host:port or socks5://host:port
     user_agent:       Optional[str] = None   # custom User-Agent header
     backup_urls:      Optional[str] = None   # newline-separated fallback URLs (failover/balance)

@@ -15,7 +15,7 @@ interface Stream {
   hls_time: number; hls_list_size: number; buffer_seconds: number
   output_rtmp?: string; output_udp?: string
   proxy?: string; user_agent?: string; backup_urls?: string
-  output_qualities?: string
+  output_qualities?: string; audio_track?: number
   enabled: boolean; status: string
   created_at: string; updated_at: string
 }
@@ -28,7 +28,7 @@ const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
   hls_time:4, hls_list_size:30, buffer_seconds:20,
   output_rtmp:'', output_udp:'',
   proxy:'', user_agent:'', backup_urls:'',
-  output_qualities:'',
+  output_qualities:'', audio_track:0,
   enabled:true,
 }
 
@@ -249,6 +249,19 @@ function StreamModal({ stream, onSave, onClose }: {
               ]} />
             </Row>
 
+            {/* ─── Copy mode: resolução preferida (variant selection) ────── */}
+            {form.video_codec === 'copy' && (
+              <Row label="Resolução preferida"
+                   hint="Para streams HLS multi-qualidade: escolhe o variant mais próximo da resolução selecionada">
+                <Sel form={form} set={set} k="video_resolution" opts={[
+                  ['original','Original (melhor disponível)'],
+                  ['1920x1080','1080p — 1920×1080'],
+                  ['1280x720', '720p — 1280×720'],
+                  ['854x480',  '480p — 854×480'],
+                ]} />
+              </Row>
+            )}
+
             {/* ─── Qualidades de saída / ABR ─────────────────────────────── */}
             {form.video_codec !== 'copy' && (
               <Row label="Qualidades de saída / ABR"
@@ -267,9 +280,9 @@ function StreamModal({ stream, onSave, onClose }: {
                       <label key={q} style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
                         <input type="checkbox" checked={checked} style={{ width:'auto', accentColor:'var(--accent)' }}
                           onChange={e => {
-                            let qs = sel.filter(x => x !== q)
+                            let qs = sel.filter((x: string) => x !== q)
                             if (e.target.checked) qs = [...qs, q]
-                            qs = ORDER.filter(x => qs.includes(x))
+                            qs = ORDER.filter((x: string) => qs.includes(x))
                             set('output_qualities', qs.join(','))
                           }} />
                         <span style={{ fontWeight:600, fontSize:13 }}>{q}</span>
@@ -311,6 +324,16 @@ function StreamModal({ stream, onSave, onClose }: {
           </>}
 
           {tab === 'audio' && <>
+            <Row label="Faixa de áudio" hint="Índice da faixa de entrada: 0 = primeira, 1 = segunda, etc.">
+              <select value={form.audio_track ?? 0}
+                      onChange={e => set('audio_track', Number(e.target.value))}>
+                <option value={0}>0 — Primeira faixa (padrão)</option>
+                <option value={1}>1 — Segunda faixa</option>
+                <option value={2}>2 — Terceira faixa</option>
+                <option value={3}>3 — Quarta faixa</option>
+                <option value={4}>4 — Quinta faixa</option>
+              </select>
+            </Row>
             <Row label="Codec de áudio">
               <Sel form={form} set={set} k="audio_codec" opts={[['copy','Copy'],['aac','AAC (transcode)']]} />
             </Row>

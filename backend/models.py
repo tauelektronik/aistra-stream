@@ -89,6 +89,9 @@ class Stream(Base):
     # Multi-quality ABR output
     output_qualities: Mapped[str|None] = mapped_column(String(50), nullable=True)  # e.g. "1080p,720p,480p"
 
+    # Source/output selection
+    audio_track      : Mapped[int]      = mapped_column(Integer, default=0)   # 0=first, 1=second, etc.
+
     # Proxy / network
     proxy         : Mapped[str|None] = mapped_column(String(500), nullable=True)   # http://user:pass@host:port or socks5://
     user_agent    : Mapped[str|None] = mapped_column(String(500), nullable=True)   # custom UA string

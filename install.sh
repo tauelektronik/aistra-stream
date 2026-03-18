@@ -175,22 +175,63 @@ install_n_m3u8dl() {
           | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\(.*\)".*/\1/')
     [ -n "$TAG" ] || { warn "Não foi possível obter versão do n_m3u8dl — pulando"; return; }
 
-    local FNAME
+    # Try filename formats: newer releases use date suffix, older use _v2
+    local FNAME FNAME2
     case "$ARCH" in
-        x86_64)  FNAME="N_m3u8DL-RE_${TAG}_linux-x64_v2.tar.gz" ;;
-        aarch64) FNAME="N_m3u8DL-RE_${TAG}_linux-arm64_v2.tar.gz" ;;
-        *)       warn "Arquitetura $ARCH não suportada para n_m3u8dl — baixe manualmente"; return ;;
+        x86_64)
+            FNAME="N_m3u8DL-RE_${TAG}_linux-x64_$(date +%Y%m%d).tar.gz"
+            FNAME2="N_m3u8DL-RE_${TAG}_linux-x64_v2.tar.gz" ;;
+        aarch64)
+            FNAME="N_m3u8DL-RE_${TAG}_linux-arm64_$(date +%Y%m%d).tar.gz"
+            FNAME2="N_m3u8DL-RE_${TAG}_linux-arm64_v2.tar.gz" ;;
+        *) warn "Arquitetura $ARCH não suportada para n_m3u8dl — baixe manualmente"; return ;;
     esac
 
-    local URL="https://github.com/nilaoda/N_m3u8DL-RE/releases/download/${TAG}/${FNAME}"
-    curl -L "$URL" -o /tmp/n_m3u8dl.tar.gz 2>/dev/null \
-        || { warn "Download falhou — verifique manualmente"; return; }
+    # Get actual asset name from GitHub API
+    local ACTUAL_FNAME
+    ACTUAL_FNAME=$(curl -s "https://api.github.com/repos/nilaoda/N_m3u8DL-RE/releases/latest" \
+        | grep '"browser_download_url"' \
+        | grep "linux-$([ "$ARCH" = x86_64 ] && echo x64 || echo arm64)" \
+        | grep -v musl | grep '\.tar\.gz' | head -1 \
+        | sed 's/.*"\(https.*\)".*/\1/')
+
+    [ -n "$ACTUAL_FNAME" ] || { warn "Não foi possível encontrar asset do n_m3u8dl"; return; }
+
+    curl -L "$ACTUAL_FNAME" -o /tmp/n_m3u8dl.tar.gz \
+        || { warn "Download do n_m3u8dl falhou"; return; }
 
     tar xf /tmp/n_m3u8dl.tar.gz -C /tmp 2>/dev/null || true
     find /tmp -name "N_m3u8DL-RE" -type f -exec cp {} /usr/local/bin/n_m3u8dl \; 2>/dev/null || true
     chmod +x /usr/local/bin/n_m3u8dl 2>/dev/null || true
     rm -f /tmp/n_m3u8dl.tar.gz
     ok "n_m3u8dl instalado em /usr/local/bin/n_m3u8dl"
+}
+
+# ── mp4decrypt (Bento4) ───────────────────────────────────────
+install_mp4decrypt() {
+    if command -v mp4decrypt &>/dev/null; then
+        ok "mp4decrypt já instalado"
+        return
+    fi
+    info "Instalando mp4decrypt (Bento4)..."
+    local ARCH; ARCH=$(uname -m)
+    local BENTO_ARCH
+    case "$ARCH" in
+        x86_64)  BENTO_ARCH="x86_64-unknown-linux" ;;
+        aarch64) BENTO_ARCH="aarch64-unknown-linux" ;;
+        *)       warn "Arquitetura $ARCH não suportada para mp4decrypt — baixe manualmente"; return ;;
+    esac
+
+    local BENTO_VER="1-6-0-641"
+    local URL="https://www.bok.net/Bento4/binaries/Bento4-SDK-${BENTO_VER}.${BENTO_ARCH}.zip"
+    curl -L "$URL" -o /tmp/bento4.zip \
+        || { warn "Download do Bento4 falhou — mp4decrypt não instalado"; return; }
+
+    unzip -o /tmp/bento4.zip -d /tmp/bento4 &>/dev/null
+    find /tmp/bento4 -name "mp4decrypt" -type f -exec cp {} /usr/local/bin/mp4decrypt \;
+    chmod +x /usr/local/bin/mp4decrypt
+    rm -rf /tmp/bento4.zip /tmp/bento4
+    ok "mp4decrypt instalado em /usr/local/bin/mp4decrypt"
 }
 
 # ── yt-dlp ────────────────────────────────────────────────────
@@ -240,8 +281,11 @@ create_env() {
         # Detectar caminhos dos binários
         FFMPEG_PATH=$(command -v ffmpeg || echo "/usr/bin/ffmpeg")
         N_M3U8DL_PATH=$(command -v n_m3u8dl || echo "/usr/local/bin/n_m3u8dl")
+        MP4DECRYPT_PATH=$(command -v mp4decrypt || echo "/usr/local/bin/mp4decrypt")
         sed -i "s|N_M3U8DL=.*|N_M3U8DL=${N_M3U8DL_PATH}|" .env
         sed -i "s|FFMPEG=.*|FFMPEG=${FFMPEG_PATH}|" .env
+        # Adiciona MP4DECRYPT se não existir
+        grep -q "^MP4DECRYPT=" .env || echo "MP4DECRYPT=${MP4DECRYPT_PATH}" >> .env
         ok "Arquivo .env criado"
     else
         warn ".env já existe — mantendo configuração atual"
@@ -326,9 +370,10 @@ print_summary() {
     echo "    Atualizar:          cd ${PROJECT_DIR} && git pull && systemctl restart aistra-stream"
     echo ""
     echo -e "  ${BOLD}Binários detectados:${NC}"
-    echo "    ffmpeg:    $(command -v ffmpeg 2>/dev/null || echo 'não encontrado')"
-    echo "    n_m3u8dl:  $(command -v n_m3u8dl 2>/dev/null || echo 'não encontrado')"
-    echo "    yt-dlp:    $(command -v yt-dlp 2>/dev/null || echo 'não encontrado')"
+    echo "    ffmpeg:      $(command -v ffmpeg 2>/dev/null || echo 'não encontrado')"
+    echo "    n_m3u8dl:    $(command -v n_m3u8dl 2>/dev/null || echo 'não encontrado')"
+    echo "    mp4decrypt:  $(command -v mp4decrypt 2>/dev/null || echo 'não encontrado')"
+    echo "    yt-dlp:      $(command -v yt-dlp 2>/dev/null || echo 'não encontrado')"
     echo ""
 }
 
@@ -340,6 +385,7 @@ install_system_deps
 ensure_node
 check_ffmpeg
 install_n_m3u8dl
+install_mp4decrypt
 install_ytdlp
 setup_database
 deploy_project

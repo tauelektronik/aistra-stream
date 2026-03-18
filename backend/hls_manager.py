@@ -107,7 +107,9 @@ class HLSManager:
             hls_dir = os.path.join(HLS_BASE, sid)
             os.makedirs(hls_dir, exist_ok=True)
 
-            is_cenc = (stream.drm_type == "cenc-ctr") and stream.drm_kid and stream.drm_key
+            is_cenc = (stream.drm_type == "cenc-ctr") and (
+                stream.drm_keys or (stream.drm_kid and stream.drm_key)
+            )
             try:
                 if is_cenc:
                     sess = await self._start_cenc_session(stream, hls_dir)
@@ -162,15 +164,31 @@ class HLSManager:
         shutil.rmtree(tmp_cwd, ignore_errors=True)
         os.makedirs(tmp_cwd, exist_ok=True)
 
-        key_arg = f"{stream.drm_kid}:{stream.drm_key}"
         clean_url = stream.url.split("#")[0]
+
+        # Build --key args: support multi-key CDM format (drm_keys) and legacy single key
+        key_pairs = []
+        if stream.drm_keys:
+            for line in stream.drm_keys.splitlines():
+                line = line.strip()
+                if ":" in line and len(line) >= 33:
+                    kid, _, key = line.partition(":")
+                    kid = kid.strip().replace(" ", "").lower()
+                    key = key.strip().replace(" ", "").lower()
+                    if kid and key:
+                        key_pairs.append(f"{kid}:{key}")
+        if not key_pairs and stream.drm_kid and stream.drm_key:
+            key_pairs.append(f"{stream.drm_kid}:{stream.drm_key}")
 
         n_args = [
             N_M3U8DL, clean_url,
             "-sv", "res=1280*:for=best",
             "-sa", "best",
             "--no-ansi-color",
-            "--key", key_arg,
+        ]
+        for kp in key_pairs:
+            n_args += ["--key", kp]
+        n_args += [
             "--decryption-binary-path", MP4DECRYPT,
             "--live-real-time-merge",
             "--live-pipe-mux",

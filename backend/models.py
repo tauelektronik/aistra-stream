@@ -58,8 +58,9 @@ class Stream(Base):
 
     # DRM
     drm_type      : Mapped[str]      = mapped_column(SAEnum(DrmType), default=DrmType.none, nullable=False)
-    drm_kid       : Mapped[str|None] = mapped_column(String(64), nullable=True)   # hex KID
-    drm_key       : Mapped[str|None] = mapped_column(String(64), nullable=True)   # hex KEY
+    drm_keys      : Mapped[str|None] = mapped_column(Text, nullable=True)          # "KID:KEY\nKID:KEY\n..." (CDM format)
+    drm_kid       : Mapped[str|None] = mapped_column(String(64), nullable=True)    # legacy single KID
+    drm_key       : Mapped[str|None] = mapped_column(String(64), nullable=True)    # legacy single KEY
 
     stream_type   : Mapped[str]      = mapped_column(SAEnum(StreamType), default=StreamType.live)
 

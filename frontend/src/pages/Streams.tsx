@@ -7,7 +7,7 @@ import api, { getHlsUrl } from '../api'
 
 interface Stream {
   id: string; name: string; url: string
-  drm_type: string; drm_kid?: string; drm_key?: string
+  drm_type: string; drm_keys?: string; drm_kid?: string; drm_key?: string
   stream_type: string
   video_codec: string; video_preset: string; video_crf: number
   video_maxrate: string; video_resolution: string
@@ -19,7 +19,7 @@ interface Stream {
 }
 
 const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
-  id:'', name:'', url:'', drm_type:'none', drm_kid:'', drm_key:'',
+  id:'', name:'', url:'', drm_type:'none', drm_keys:'', drm_kid:'', drm_key:'',
   stream_type:'live', video_codec:'libx264', video_preset:'ultrafast',
   video_crf:26, video_maxrate:'', video_resolution:'original',
   audio_codec:'aac', audio_bitrate:'128k',
@@ -184,14 +184,14 @@ function StreamModal({ stream, onSave, onClose }: {
               <Sel k="drm_type" opts={[['none','Sem DRM'],['cenc-ctr','CENC-CTR (Disney+, etc.)']]} />
             </Row>
             {form.drm_type === 'cenc-ctr' && <>
-              <div className="grid-2">
-                <Row label="KID (hex)" hint="Key ID sem prefixo 0x">
-                  <input value={form.drm_kid||''} onChange={e => set('drm_kid', e.target.value)} placeholder="c2e511d926db4f20..." />
-                </Row>
-                <Row label="KEY (hex)" hint="Chave de decriptação">
-                  <input value={form.drm_key||''} onChange={e => set('drm_key', e.target.value)} placeholder="4d67d0f698ad3340..." />
-                </Row>
-              </div>
+              <Row label="Keys / CDM Script" hint="Um par KID:KEY por linha — formato de saída de CDM tools">
+                <textarea
+                  rows={5}
+                  value={form.drm_keys||''}
+                  onChange={e => set('drm_keys', e.target.value)}
+                  placeholder={'c2e511d926db4f209e8cd856656e6bb1:4d67d0f698ad334072056dfbf61d4a99\n0101a79fc2c4cd3239893a14661661ac:dbbf91281e295228e8a49e273f77bd9d\n...'}
+                  style={{ fontFamily:'monospace', fontSize:12, resize:'vertical' }}
+                />
             </>}
             <div style={{ display:'flex', alignItems:'center', gap:10 }}>
               <input type="checkbox" id="enabled" checked={form.enabled} onChange={e => set('enabled', e.target.checked)} style={{ width:'auto' }} />

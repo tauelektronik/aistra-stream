@@ -43,8 +43,9 @@ class StreamBase(BaseModel):
     name:             str
     url:              str
     drm_type:         str = "none"
-    drm_kid:          Optional[str] = None
-    drm_key:          Optional[str] = None
+    drm_keys:         Optional[str] = None   # "KID:KEY\nKID:KEY\n..." (CDM format, multiple lines)
+    drm_kid:          Optional[str] = None   # legacy single KID (still accepted)
+    drm_key:          Optional[str] = None   # legacy single KEY
     stream_type:      str = "live"
     video_codec:      str = "libx264"
     video_preset:     str = "ultrafast"

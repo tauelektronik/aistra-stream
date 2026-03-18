@@ -22,7 +22,8 @@ const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
   stream_type:'live', video_codec:'libx264', video_preset:'ultrafast',
   video_crf:26, video_maxrate:'', video_resolution:'original',
   audio_codec:'aac', audio_bitrate:'128k',
-  hls_time:4, hls_list_size:30, buffer_seconds:20, enabled:true,
+  hls_time:4, hls_list_size:30, buffer_seconds:20,
+  output_rtmp:'', output_udp:'', enabled:true,
 }
 
 // ─── Player component ─────────────────────────────────────────────────────────
@@ -254,6 +255,20 @@ function StreamModal({ stream, onSave, onClose }: {
               {form.buffer_seconds}s &nbsp;|&nbsp;
               <strong style={{ color:'var(--text2)' }}>Segmentos de buffer:</strong>{' '}
               {Math.max(2, Math.round(form.buffer_seconds / form.hls_time))}
+            </div>
+
+            <div style={{ marginTop:16, borderTop:'1px solid var(--border)', paddingTop:16 }}>
+              <div style={{ fontSize:12, fontWeight:600, color:'var(--text2)', marginBottom:12, textTransform:'uppercase', letterSpacing:'0.05em' }}>
+                Saídas Adicionais (opcional)
+              </div>
+              <Row label="Saída RTMP" hint='Ex: rtmp://live.twitch.tv/live/STREAM_KEY'>
+                <input value={form.output_rtmp||''} onChange={e => set('output_rtmp', e.target.value)}
+                       placeholder="rtmp://..." />
+              </Row>
+              <Row label="Saída UDP / Multicast" hint='Ex: udp://239.0.0.1:1234 ou udp://127.0.0.1:5000'>
+                <input value={form.output_udp||''} onChange={e => set('output_udp', e.target.value)}
+                       placeholder="udp://..." />
+              </Row>
             </div>
           </>}
 

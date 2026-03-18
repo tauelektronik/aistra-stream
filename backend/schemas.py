@@ -56,6 +56,8 @@ class StreamBase(BaseModel):
     hls_time:         int = Field(4, ge=1, le=10)
     hls_list_size:    int = Field(30, ge=5, le=120)
     buffer_seconds:   int = Field(20, ge=5, le=120)
+    output_rtmp:      Optional[str] = None
+    output_udp:       Optional[str] = None
     enabled:          bool = True
 
 class StreamCreate(StreamBase):

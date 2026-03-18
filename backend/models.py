@@ -81,6 +81,10 @@ class Stream(Base):
     # Player settings (sent to frontend)
     buffer_seconds: Mapped[int]      = mapped_column(Integer, default=20)  # target latency buffer (s)
 
+    # Output destinations (optional, in addition to HLS)
+    output_rtmp   : Mapped[str|None] = mapped_column(String(500), nullable=True)   # e.g. rtmp://live.twitch.tv/live/KEY
+    output_udp    : Mapped[str|None] = mapped_column(String(200), nullable=True)   # e.g. udp://239.0.0.1:1234
+
     # Metadata
     enabled       : Mapped[bool]     = mapped_column(Boolean, default=True)
     created_at    : Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

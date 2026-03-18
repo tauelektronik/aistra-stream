@@ -242,14 +242,30 @@ class HLSManager:
         ]
         ff_args += _build_ffmpeg_video_args(stream)
         ff_args += _build_ffmpeg_audio_args(stream)
-        ff_args += [
-            "-f",                "hls",
-            "-hls_time",         str(stream.hls_time),
-            "-hls_list_size",    str(stream.hls_list_size),
-            "-hls_flags",        "append_list",
-            "-hls_segment_filename", os.path.join(hls_dir, "seg%05d.ts"),
-            playlist,
-        ]
+
+        hls_out = (
+            f"[f=hls:hls_time={stream.hls_time}:hls_list_size={stream.hls_list_size}"
+            f":hls_flags=append_list"
+            f":hls_segment_filename={os.path.join(hls_dir, 'seg%05d.ts')}]{playlist}"
+        )
+
+        extra_outputs = []
+        if stream.output_rtmp:
+            extra_outputs.append(f"[f=flv]{stream.output_rtmp}")
+        if stream.output_udp:
+            extra_outputs.append(f"[f=mpegts]{stream.output_udp}")
+
+        if extra_outputs:
+            ff_args += ["-f", "tee", "|".join([hls_out] + extra_outputs)]
+        else:
+            ff_args += [
+                "-f", "hls",
+                "-hls_time",         str(stream.hls_time),
+                "-hls_list_size",    str(stream.hls_list_size),
+                "-hls_flags",        "append_list",
+                "-hls_segment_filename", os.path.join(hls_dir, "seg%05d.ts"),
+                playlist,
+            ]
 
         ff_log  = open(f"/tmp/ffmpeg_{sid}.log", "ab")
         ff_proc = await asyncio.create_subprocess_exec(

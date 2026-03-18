@@ -153,6 +153,7 @@ def _build_ffmpeg_multi_quality_args(stream, hls_dir: str, url: str, qualities: 
         "-reconnect_at_eof",    "1",
         "-reconnect_streamed",  "1",
         "-reconnect_delay_max", "5",
+        "-allowed_extensions",  "ALL",
     ]
     if stream.user_agent:
         args += ["-user_agent", stream.user_agent]
@@ -422,6 +423,7 @@ class HLSManager:
                 "-reconnect_at_eof",     "1",
                 "-reconnect_streamed",   "1",
                 "-reconnect_delay_max",  "5",
+                "-allowed_extensions",   "ALL",
             ]
             if stream.user_agent:
                 ff_args += ["-user_agent", stream.user_agent]

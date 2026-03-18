@@ -66,9 +66,11 @@ install_system_deps() {
         debian)
             export DEBIAN_FRONTEND=noninteractive
             apt-get update -qq
+            # Remove Ubuntu npm/libnode-dev that conflict with NodeSource nodejs
+            apt-get remove -y libnode-dev nodejs-doc npm 2>/dev/null || true
             apt-get install -y -qq \
                 curl wget git python3 python3-pip python3-venv \
-                nodejs npm ffmpeg mariadb-server \
+                ffmpeg mariadb-server \
                 build-essential libssl-dev unzip ;;
 
         rhel)

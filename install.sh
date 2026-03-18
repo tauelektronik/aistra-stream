@@ -108,6 +108,9 @@ ensure_node() {
         info "Node.js $ver < 18 — instalando Node 20 via NodeSource..."
         case "$FAMILY" in
             debian)
+                # Remove conflicting packages before NodeSource install
+                apt-get remove -y nodejs libnode-dev nodejs-doc 2>/dev/null || true
+                apt-get autoremove -y 2>/dev/null || true
                 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
                 apt-get install -y nodejs ;;
             rhel|fedora)

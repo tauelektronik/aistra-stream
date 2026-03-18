@@ -107,8 +107,8 @@ function StreamModal({ stream, onSave, onClose }: {
     setSaving(true); setError('')
     try {
       const payload = { ...form }
-      // Auto-generate id from name if empty
-      if (isNew && !payload.id) {
+      // Auto-generate id from name if empty or too short
+      if (isNew && (!payload.id || payload.id.length < 2)) {
         payload.id = payload.name
           .toLowerCase()
           .replace(/[^a-z0-9]+/g, '_')

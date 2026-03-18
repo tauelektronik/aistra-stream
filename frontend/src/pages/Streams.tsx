@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import Hls from 'hls.js'
-import { FiPlay, FiSquare, FiEdit2, FiTrash2, FiPlus, FiX, FiRefreshCw, FiExternalLink, FiEye } from 'react-icons/fi'
+import { FiPlay, FiSquare, FiEdit2, FiTrash2, FiPlus, FiX, FiRefreshCw, FiExternalLink, FiVideo, FiAlertCircle } from 'react-icons/fi'
 import api, { getHlsUrl } from '../api'
 
 // ─── types ────────────────────────────────────────────────────────────────────
@@ -446,6 +446,46 @@ export default function Streams() {
       </div>
 
       <div className="page-content">
+        {!loading && streams.length > 0 && (() => {
+          const total   = streams.length
+          const running = streams.filter(s => s.status === 'running').length
+          const stopped = streams.filter(s => s.status === 'stopped').length
+          const errors  = streams.filter(s => s.status === 'error').length
+          return (
+            <div className="stats-row">
+              <div className="stat-card">
+                <div className="stat-icon" style={{ color: 'var(--accent)' }}><FiVideo size={14} /></div>
+                <div className="stat-value" style={{ color: 'var(--accent)' }}>{total}</div>
+                <div className="stat-label">Total</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-icon" style={{ color: 'var(--success)' }}><FiPlay size={14} /></div>
+                <div className="stat-value" style={{ color: 'var(--success)' }}>{running}</div>
+                <div className="stat-label">Rodando</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-icon" style={{ color: 'var(--text3)' }}><FiSquare size={14} /></div>
+                <div className="stat-value" style={{ color: 'var(--text3)' }}>{stopped}</div>
+                <div className="stat-label">Parado</div>
+              </div>
+              {errors > 0 && (
+                <div className="stat-card">
+                  <div className="stat-icon" style={{ color: 'var(--danger)' }}><FiAlertCircle size={14} /></div>
+                  <div className="stat-value" style={{ color: 'var(--danger)' }}>{errors}</div>
+                  <div className="stat-label">Erro</div>
+                </div>
+              )}
+              {errors === 0 && (
+                <div className="stat-card" style={{ opacity: 0.4 }}>
+                  <div className="stat-icon" style={{ color: 'var(--danger)' }}><FiAlertCircle size={14} /></div>
+                  <div className="stat-value" style={{ color: 'var(--danger)' }}>0</div>
+                  <div className="stat-label">Erro</div>
+                </div>
+              )}
+            </div>
+          )
+        })()}
+
         {loading ? (
           <div style={{ color:'var(--text3)', textAlign:'center', padding:40 }}>Carregando…</div>
         ) : streams.length === 0 ? (

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { FiVideo, FiUsers, FiLogOut, FiMenu } from 'react-icons/fi'
+import { FiGrid, FiVideo, FiUsers, FiLogOut, FiRadio } from 'react-icons/fi'
 
 export default function Layout() {
   const nav      = useNavigate()
@@ -23,14 +23,22 @@ export default function Layout() {
     nav('/login')
   }
 
+  const initials = (user.username || 'U').charAt(0).toUpperCase()
+
   return (
     <div className="layout">
       {/* Backdrop overlay — closes sidebar on mobile */}
       <div className={`sidebar-overlay${open ? ' open' : ''}`} onClick={() => setOpen(false)} />
 
       <aside className={`sidebar${open ? ' open' : ''}`}>
-        <div className="sidebar-logo">📡 Aistra Stream</div>
+        <div className="sidebar-logo">
+          <FiRadio size={18} color="var(--accent)" />
+          Aistra Stream
+        </div>
         <nav className="sidebar-nav">
+          <NavLink to="/dashboard" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+            <FiGrid size={16} /> Dashboard
+          </NavLink>
           <NavLink to="/streams" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
             <FiVideo size={16} /> Streams
           </NavLink>
@@ -41,11 +49,14 @@ export default function Layout() {
           )}
         </nav>
         <div className="sidebar-bottom">
-          <div style={{ marginBottom: 8 }}>
-            <span style={{ color:'var(--text2)', fontWeight:500 }}>{user.username}</span>
-            <span style={{ marginLeft: 6, color:'var(--text3)' }}>{user.role}</span>
+          <div className="sidebar-user">
+            <div className="avatar">{initials}</div>
+            <div className="sidebar-user-info">
+              <span className="sidebar-username">{user.username}</span>
+              {user.role && <span className="sidebar-role">{user.role}</span>}
+            </div>
           </div>
-          <button className="btn btn-ghost btn-sm" style={{ width:'100%', justifyContent:'center' }} onClick={logout}>
+          <button className="btn btn-ghost btn-sm" style={{ width: '100%', justifyContent: 'center' }} onClick={logout}>
             <FiLogOut size={13} /> Sair
           </button>
         </div>
@@ -57,7 +68,10 @@ export default function Layout() {
           <button className="menu-btn" onClick={() => setOpen(o => !o)} aria-label="Abrir menu">
             <span /><span /><span />
           </button>
-          <span className="topbar-title">📡 Aistra Stream</span>
+          <span className="topbar-title">
+            <FiRadio size={15} style={{ marginRight: 6, verticalAlign: 'middle' }} />
+            Aistra Stream
+          </span>
         </div>
         <Outlet />
       </main>

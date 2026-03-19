@@ -532,11 +532,14 @@ class HLSManager:
             path,
         ]
         log  = _open_log(f"/tmp/ffmpeg_rec_{sid}.log")
-        proc = await asyncio.create_subprocess_exec(
-            *ff_args,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=log,
+        proc = await asyncio.wait_for(
+            asyncio.create_subprocess_exec(
+                *ff_args,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=log,
+            ),
+            timeout=15,
         )
         self._recordings[stream_id] = {
             "proc":       proc,
@@ -667,6 +670,15 @@ class HLSManager:
                 try: os.unlink(f)
                 except Exception: pass
         logger.info("Startup cleanup done")
+        # Validate critical binaries on startup so failures are visible immediately
+        for binary, name in [(FFMPEG, "ffmpeg"), (N_M3U8DL, "n_m3u8dl"),
+                              (YTDLP, "yt-dlp"), (MP4DECRYPT, "mp4decrypt")]:
+            if not os.path.isfile(binary):
+                logger.warning("Binary NOT FOUND: %s → %s  (some features disabled)", name, binary)
+            elif not os.access(binary, os.X_OK):
+                logger.warning("Binary NOT EXECUTABLE: %s → %s  (check permissions)", name, binary)
+            else:
+                logger.info("Binary OK: %-12s → %s", name, binary)
 
     # ── CENC pipeline: n_m3u8dl → FIFO → ffmpeg ──────────────────────────────
 
@@ -719,12 +731,15 @@ class HLSManager:
         ]
 
         n_log  = _open_log(f"/tmp/n_m3u8dl_{sid}.log")
-        n_proc = await asyncio.create_subprocess_exec(
-            *n_args,
-            cwd=tmp_cwd,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=n_log,
+        n_proc = await asyncio.wait_for(
+            asyncio.create_subprocess_exec(
+                *n_args,
+                cwd=tmp_cwd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=n_log,
+            ),
+            timeout=15,
         )
 
         playlist = os.path.join(hls_dir, "stream.m3u8")
@@ -746,11 +761,14 @@ class HLSManager:
         ]
         ff_log = _open_log(f"/tmp/ffmpeg_{sid}.log")
         try:
-            ff_proc = await asyncio.create_subprocess_exec(
-                *ff_args,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=ff_log,
+            ff_proc = await asyncio.wait_for(
+                asyncio.create_subprocess_exec(
+                    *ff_args,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=ff_log,
+                ),
+                timeout=15,
             )
         except Exception:
             # ffmpeg spawn failed — kill n_m3u8dl and clean up FIFO
@@ -762,6 +780,8 @@ class HLSManager:
             except Exception: pass
             try: os.unlink(fifo_path)
             except Exception: pass
+            try: shutil.rmtree(tmp_cwd, ignore_errors=True)
+            except Exception: pass
             raise
 
         return {
@@ -769,6 +789,7 @@ class HLSManager:
             "extra_proc": n_proc,
             "hls_dir":    hls_dir,
             "fifo_path":  fifo_path,
+            "tmp_cwd":    tmp_cwd,
             "ff_log":     ff_log,
             "extra_log":  n_log,
             "prog_path":  prog_path,
@@ -867,12 +888,15 @@ class HLSManager:
                 env[key] = stream.proxy
 
         ff_log  = _open_log(f"/tmp/ffmpeg_{sid}.log")
-        ff_proc = await asyncio.create_subprocess_exec(
-            *ff_args,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=ff_log,
-            env=env,
+        ff_proc = await asyncio.wait_for(
+            asyncio.create_subprocess_exec(
+                *ff_args,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=ff_log,
+                env=env,
+            ),
+            timeout=15,
         )
 
         return {
@@ -905,6 +929,11 @@ class HLSManager:
         try:
             fp = sess.get("fifo_path")
             if fp: os.unlink(fp)
+        except Exception: pass
+        try:
+            tc = sess.get("tmp_cwd")
+            if tc:
+                shutil.rmtree(tc, ignore_errors=True)
         except Exception: pass
         try:
             shutil.rmtree(sess["hls_dir"], ignore_errors=True)

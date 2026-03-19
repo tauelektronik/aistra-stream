@@ -605,7 +605,7 @@ async def api_upload_logo(
     if not cat:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
 
-    # Validate type + size
+    # Validate type (header) + size + magic bytes (prevents MIME spoofing)
     allowed = {"image/png", "image/jpeg", "image/webp", "image/svg+xml", "image/gif"}
     content_type = file.content_type or ""
     if content_type not in allowed:
@@ -614,6 +614,19 @@ async def api_upload_logo(
     data = await file.read()
     if len(data) > 2 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Logo muito grande (máx 2MB)")
+
+    # Magic byte validation — rejects files with a spoofed Content-Type header
+    def _valid_image_magic(b: bytes) -> bool:
+        if b[:8] == b"\x89PNG\r\n\x1a\n":                    return True  # PNG
+        if b[:3] == b"\xff\xd8\xff":                          return True  # JPEG
+        if b[:4] == b"RIFF" and b[8:12] == b"WEBP":          return True  # WEBP
+        if b[:6] in (b"GIF87a", b"GIF89a"):                  return True  # GIF
+        head = b[:512].lstrip()  # SVG is text — tolerate BOM / leading whitespace
+        if any(head.startswith(p) for p in (b"<svg", b"<?xml", b"<!DOCTYPE svg")): return True
+        return False
+
+    if not _valid_image_magic(data):
+        raise HTTPException(status_code=400, detail="Arquivo não reconhecido como imagem válida.")
 
     ext = content_type.split("/")[-1].replace("svg+xml", "svg")
     filename = f"cat_{cat_id}.{ext}"

@@ -11,6 +11,10 @@ set -e
 PROJECT_DIR="/opt/aistra-stream"
 PORT=${PORT:-8001}
 
+# Token GitHub read-only para repositório privado
+GH_TOKEN="COLE_SEU_GITHUB_PAT_AQUI"
+GIT_REPO="https://${GH_TOKEN}@github.com/tauelektronik/aistra-stream.git"
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}[OK]${NC} $*"; }
@@ -38,13 +42,17 @@ fi
 # ── 2. git pull ───────────────────────────────────────────────
 if [ -d .git ]; then
     info "Baixando atualizações do repositório..."
-    git fetch --quiet
+    # Injeta token temporariamente para o fetch (sem persistir credenciais)
+    git remote set-url origin "$GIT_REPO" 2>/dev/null || true
+    GIT_TERMINAL_PROMPT=0 git fetch --quiet
+    # Restaura URL pública (sem token) imediatamente após o fetch
+    git remote set-url origin "https://github.com/tauelektronik/aistra-stream.git" 2>/dev/null || true
     LOCAL=$(git rev-parse HEAD)
     REMOTE=$(git rev-parse '@{u}' 2>/dev/null || echo "unknown")
     if [ "$LOCAL" = "$REMOTE" ]; then
         ok "Código já está atualizado ($(git rev-parse --short HEAD))"
     else
-        git pull --ff-only || { warn "git pull falhou — tente resolver conflitos manualmente"; exit 1; }
+        git merge --ff-only FETCH_HEAD || { warn "git merge falhou — tente resolver conflitos manualmente"; exit 1; }
         ok "Código atualizado para $(git rev-parse --short HEAD)"
     fi
 else

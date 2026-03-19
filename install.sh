@@ -3,17 +3,24 @@
 #  aistra-stream — Universal Linux Install Script
 #  Suporta: Ubuntu/Debian · CentOS/RHEL/AlmaLinux/Rocky · Fedora · Arch
 #
-#  Instalação rápida (uma linha):
-#    bash <(curl -fsSL https://raw.githubusercontent.com/tauelektronik/aistra-stream/main/install.sh)
+#  Instalação rápida (uma linha — repositório privado):
+#    bash <(curl -fsSL "https://raw.githubusercontent.com/tauelektronik/aistra-stream/main/install.sh?token=TOKEN")
 #
-#  Ou clone + instale:
-#    git clone https://github.com/tauelektronik/aistra-stream.git
-#    sudo bash aistra-stream/install.sh
+#  Ou baixe o script e execute:
+#    curl -fsSL -H "Authorization: token GITHUB_PAT" \
+#         https://raw.githubusercontent.com/tauelektronik/aistra-stream/main/install.sh \
+#         -o install.sh && sudo bash install.sh
 # ═══════════════════════════════════════════════════════════════
 set -e
 
 PROJECT_DIR="/opt/aistra-stream"
-GIT_REPO="https://github.com/tauelektronik/aistra-stream.git"
+
+# ── Token GitHub (read-only, repositório aistra-stream) ───────
+# Fine-grained PAT com permissão "Contents: Read-only" no repo.
+# Para rotacionar: gere novo token em GitHub → Settings → Developer settings
+#                  → Fine-grained tokens e atualize aqui + no raw URL acima.
+GH_TOKEN="COLE_SEU_GITHUB_PAT_AQUI"
+GIT_REPO="https://${GH_TOKEN}@github.com/tauelektronik/aistra-stream.git"
 PORT=8001
 DB_NAME="aistra_stream"
 DB_USER="aistra"
@@ -266,10 +273,14 @@ deploy_project() {
         # Já está no destino (clone direto em /opt/aistra-stream)
         ok "Projeto já em ${PROJECT_DIR}"
     elif [ -d "$PROJECT_DIR/.git" ]; then
-        # Instalação existente — atualiza via git pull
+        # Instalação existente — atualiza via git pull com token
         info "Atualizando instalação existente..."
         cd "$PROJECT_DIR"
+        # Injeta token temporariamente no remote, sem persistir em disco
+        git remote set-url origin "$GIT_REPO" 2>/dev/null || true
         git pull --ff-only || { warn "git pull falhou — mantendo versão atual"; }
+        # Remove token do remote (deixa URL limpa sem credenciais armazenadas)
+        git remote set-url origin "https://github.com/tauelektronik/aistra-stream.git" 2>/dev/null || true
         ok "Projeto atualizado em ${PROJECT_DIR}"
     elif [ -d "$SRC/.git" ]; then
         # Clone local — copia para destino
@@ -278,13 +289,15 @@ deploy_project() {
         cp -r "$SRC/." "$PROJECT_DIR/"
         ok "Projeto copiado para ${PROJECT_DIR}"
     else
-        # Sem git disponível — clona do GitHub
-        info "Clonando repositório de ${GIT_REPO}..."
+        # Clona do GitHub usando token (sem interação)
+        info "Clonando repositório privado do GitHub..."
         command -v git &>/dev/null || { apt-get install -y git 2>/dev/null || $PKG_MGR install -y git; }
-        if [ -d "$PROJECT_DIR" ]; then
-            rm -rf "$PROJECT_DIR"
-        fi
-        git clone --depth 1 "$GIT_REPO" "$PROJECT_DIR"
+        [ -d "$PROJECT_DIR" ] && rm -rf "$PROJECT_DIR"
+        # GIT_TERMINAL_PROMPT=0 garante que não abre prompt de senha em caso de falha
+        GIT_TERMINAL_PROMPT=0 git clone --depth 1 "$GIT_REPO" "$PROJECT_DIR"
+        # Substitui remote URL pelo endereço público (sem token) para não persistir credenciais
+        cd "$PROJECT_DIR"
+        git remote set-url origin "https://github.com/tauelektronik/aistra-stream.git"
         ok "Repositório clonado em ${PROJECT_DIR}"
     fi
     cd "$PROJECT_DIR"

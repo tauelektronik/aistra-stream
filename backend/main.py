@@ -69,6 +69,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     hls_manager.startup_cleanup()
     hls_manager.start_background_cleanup()
+    asyncio.create_task(_server_stats_updater())
     await _ensure_default_admin()
     # Apply persisted settings
     _s = _load_settings()
@@ -361,7 +362,13 @@ async def api_stream_log(
 
 # ── App settings ──────────────────────────────────────────────────────────────
 
-_SETTINGS_FILE = os.getenv("AISTRA_SETTINGS_FILE", "/tmp/aistra_settings.json")
+# Default: PROJECT_DIR/data/settings.json (persistent across reboots).
+# Override with AISTRA_SETTINGS_FILE env var if needed.
+_PROJECT_ROOT  = Path(__file__).parent.parent
+_SETTINGS_FILE = os.getenv(
+    "AISTRA_SETTINGS_FILE",
+    str(_PROJECT_ROOT / "data" / "settings.json"),
+)
 
 def _load_settings() -> dict:
     if os.path.exists(_SETTINGS_FILE):
@@ -375,6 +382,7 @@ def _load_settings() -> dict:
 
 def _save_settings(data: dict):
     import json
+    os.makedirs(os.path.dirname(_SETTINGS_FILE), exist_ok=True)
     tmp = _SETTINGS_FILE + ".tmp"
     with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
@@ -658,62 +666,75 @@ async def api_assign_streams(
 
 # ── Server stats ──────────────────────────────────────────────────────────────
 
-_net_prev: dict = {}   # cache for network delta calculation
+# ── Server stats — background cache (updated every 5 s) ──────────────────────
+# Avoids holding a 0.5 s sleep inside the HTTP request handler, which would
+# block the connection and degrade performance under concurrent polling.
+
+_server_stats_cache: dict = {}
+
+
+async def _server_stats_updater():
+    """Background task: refresh server stats every 5 seconds."""
+    import psutil, subprocess as _sp
+
+    psutil.cpu_percent(interval=None)   # prime the CPU counter
+
+    _net_prev_bytes = psutil.net_io_counters()
+    while True:
+        await asyncio.sleep(5)
+        try:
+            cpu_pct = psutil.cpu_percent(interval=None)
+            mem     = psutil.virtual_memory()
+            disk    = psutil.disk_usage("/")
+
+            net_cur       = psutil.net_io_counters()
+            net_up_bps    = max(0, (net_cur.bytes_sent - _net_prev_bytes.bytes_sent) // 5)
+            net_down_bps  = max(0, (net_cur.bytes_recv - _net_prev_bytes.bytes_recv) // 5)
+            _net_prev_bytes = net_cur
+
+            gpu = None
+            try:
+                r = _sp.run(
+                    ["nvidia-smi",
+                     "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+                     "--format=csv,noheader,nounits"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                if r.returncode == 0:
+                    parts = [p.strip() for p in r.stdout.strip().split(",")]
+                    if len(parts) >= 5:
+                        gpu = {
+                            "name":            parts[0],
+                            "utilization_pct": int(parts[1]),
+                            "memory_used_mb":  int(parts[2]),
+                            "memory_total_mb": int(parts[3]),
+                            "temperature_c":   int(parts[4]),
+                        }
+            except Exception:
+                pass
+
+            _server_stats_cache.update({
+                "cpu_pct":       round(cpu_pct, 1),
+                "mem_used_gb":   round(mem.used   / 1024 ** 3, 1),
+                "mem_total_gb":  round(mem.total  / 1024 ** 3, 1),
+                "mem_pct":       round(mem.percent, 1),
+                "disk_used_gb":  round(disk.used  / 1024 ** 3, 1),
+                "disk_total_gb": round(disk.total / 1024 ** 3, 1),
+                "disk_pct":      round(disk.percent, 1),
+                "net_up_mbps":   round(net_up_bps   / 1024 ** 2, 2),
+                "net_down_mbps": round(net_down_bps / 1024 ** 2, 2),
+                "gpu":           gpu,
+            })
+        except Exception as _e:
+            logger.debug("server_stats_updater error: %s", _e)
+
 
 @app.get("/api/server/stats")
-async def server_stats(current_user=Depends(get_current_user)):
-    import psutil, subprocess, asyncio as _aio
-
-    # CPU (non-blocking: use cached 1-interval reading)
-    cpu_pct = psutil.cpu_percent(interval=None)
-
-    # RAM
-    mem  = psutil.virtual_memory()
-
-    # Disk (root partition)
-    disk = psutil.disk_usage("/")
-
-    # Network — delta between two 0.5s samples → bytes/sec
-    net1 = psutil.net_io_counters()
-    await _aio.sleep(0.5)
-    net2 = psutil.net_io_counters()
-    net_up_bps   = max(0, (net2.bytes_sent - net1.bytes_sent) * 2)
-    net_down_bps = max(0, (net2.bytes_recv - net1.bytes_recv) * 2)
-
-    # GPU via nvidia-smi (optional)
-    gpu = None
-    try:
-        r = subprocess.run(
-            ["nvidia-smi",
-             "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=3,
-        )
-        if r.returncode == 0:
-            parts = [p.strip() for p in r.stdout.strip().split(",")]
-            if len(parts) >= 5:
-                gpu = {
-                    "name":             parts[0],
-                    "utilization_pct":  int(parts[1]),
-                    "memory_used_mb":   int(parts[2]),
-                    "memory_total_mb":  int(parts[3]),
-                    "temperature_c":    int(parts[4]),
-                }
-    except Exception:
-        pass
-
-    return {
-        "cpu_pct":        round(cpu_pct, 1),
-        "mem_used_gb":    round(mem.used   / 1024 ** 3, 1),
-        "mem_total_gb":   round(mem.total  / 1024 ** 3, 1),
-        "mem_pct":        round(mem.percent, 1),
-        "disk_used_gb":   round(disk.used  / 1024 ** 3, 1),
-        "disk_total_gb":  round(disk.total / 1024 ** 3, 1),
-        "disk_pct":       round(disk.percent, 1),
-        "net_up_mbps":    round(net_up_bps   / 1024 ** 2, 2),
-        "net_down_mbps":  round(net_down_bps / 1024 ** 2, 2),
-        "gpu":            gpu,
-    }
+async def server_stats(_=Depends(get_current_user)):
+    """Return cached server stats (updated every 5 s by background task)."""
+    if not _server_stats_cache:
+        return {"error": "Stats ainda sendo coletadas, tente novamente em 5s"}
+    return _server_stats_cache
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -721,14 +742,15 @@ async def server_stats(current_user=Depends(get_current_user)):
 @app.get("/health", include_in_schema=False)
 async def health(db: AsyncSession = Depends(get_db)):
     streams = await list_streams(db)
-    running = sum(1 for s in streams if hls_manager._sessions.get(s.id) is not None)
+    running = sum(1 for s in streams if await hls_manager.get_status(s.id) == "running")
     return {"status": "ok", "streams_total": len(streams), "streams_running": running}
 
 
 # ── HLS delivery ──────────────────────────────────────────────────────────────
 
-_VALID_QUALITY_RE = re.compile(r'^(360p|480p|720p|1080p)$')
-_VALID_SEGMENT_RE = re.compile(r'^seg\d{1,7}\.ts$')
+_VALID_QUALITY_RE  = re.compile(r'^(360p|480p|720p|1080p)$')
+_VALID_SEGMENT_RE  = re.compile(r'^seg\d{1,7}\.ts$')
+_VALID_STREAM_ID_RE = re.compile(r'^[a-zA-Z0-9_-]{1,50}$')
 
 
 @app.get("/stream/{stream_id}/hls/stream.m3u8")
@@ -738,6 +760,8 @@ async def stream_hls_master_playlist(
     db: AsyncSession = Depends(get_db),
 ):
     """Master playlist — triggers ffmpeg HLS session. Requires DB lookup."""
+    if not _VALID_STREAM_ID_RE.match(stream_id):
+        return Response(content="Stream não encontrado", status_code=404)
     stream = await get_stream(db, stream_id)
     if not stream or not stream.enabled:
         return Response(content="Stream não encontrado", status_code=404)
@@ -763,6 +787,8 @@ async def stream_hls_files(
     request: Request,
 ):
     """HLS segments and quality sub-playlists — no DB lookup for high concurrency."""
+    if not _VALID_STREAM_ID_RE.match(stream_id):
+        return Response(content="Não encontrado", status_code=404)
     if ".." in segment:
         return Response(content="Não encontrado", status_code=404)
     parts = segment.split("/")

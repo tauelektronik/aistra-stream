@@ -349,8 +349,8 @@ create_env() {
     fi
 
     # Criar diretórios persistentes
-    mkdir -p "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos"
-    chmod 750 "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos"
+    mkdir -p "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos" "${PROJECT_DIR}/data"
+    chmod 750 "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos" "${PROJECT_DIR}/data"
 }
 
 # ── Frontend build ─────────────────────────────────────────────

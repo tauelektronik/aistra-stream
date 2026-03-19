@@ -12,6 +12,9 @@ build/
 # Env
 .env
 
+# Runtime data (settings, etc) — never commit
+data/
+
 # Node / frontend
 frontend/node_modules/
 frontend/dist/

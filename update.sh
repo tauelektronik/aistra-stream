@@ -64,8 +64,8 @@ info "Verificando variáveis do .env..."
 grep -q "^RECORDINGS_BASE=" .env || echo "RECORDINGS_BASE=${PROJECT_DIR}/recordings" >> .env
 grep -q "^THUMBNAILS_BASE=" .env || echo "THUMBNAILS_BASE=/tmp/aistra_thumbnails"    >> .env
 grep -q "^LOGOS_BASE="      .env || echo "LOGOS_BASE=${PROJECT_DIR}/logos"            >> .env
-mkdir -p "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos"
-chmod 750 "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos"
+mkdir -p "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos" "${PROJECT_DIR}/data"
+chmod 750 "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos" "${PROJECT_DIR}/data"
 ok ".env verificado"
 
 # ── 4. Atualizar dependências Python ──────────────────────────

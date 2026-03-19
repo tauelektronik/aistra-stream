@@ -248,6 +248,7 @@ class StreamUpdate(StreamBase):
 
 class StreamOut(StreamBase):
     id:          str
+    name:        str = ""          # no min_length — existing DB rows may have empty name
     channel_num: Optional[int] = None
     created_at:  datetime
     updated_at:  datetime

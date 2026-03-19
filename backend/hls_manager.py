@@ -445,9 +445,12 @@ class HLSManager:
         bitrate      = data.get("bitrate", "")
         frame        = data.get("frame",  "0")
         speed        = data.get("speed",  "")
-        drop_frames  = int(data.get("drop_frames", 0) or 0)
-        dup_frames   = int(data.get("dup_frames",  0) or 0)
-        total_size_b = int(data.get("total_size",  0) or 0)
+        def _safe_int(v, default=0):
+            try: return int(v or default)
+            except (ValueError, TypeError): return default
+        drop_frames  = _safe_int(data.get("drop_frames", 0))
+        dup_frames   = _safe_int(data.get("dup_frames",  0))
+        total_size_b = _safe_int(data.get("total_size",  0))
 
         # Parse bitrate from progress file (format: "12345.6kbits/s" or "12345.6")
         bitrate_kbps = 0.0

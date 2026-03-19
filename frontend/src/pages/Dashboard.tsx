@@ -1,9 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
-  FiVideo, FiPlay, FiSquare, FiAlertCircle, FiRefreshCw, FiArrowRight,
+  FiVideo, FiPlay, FiSquare, FiAlertCircle, FiRefreshCw,
   FiCpu, FiHardDrive, FiWifi, FiMonitor,
 } from 'react-icons/fi'
-import { NavLink } from 'react-router-dom'
 import api from '../api'
 
 interface Stream {
@@ -97,8 +96,7 @@ export default function Dashboard() {
   const running       = streams.filter(s => s.status === 'running').length
   const stopped       = streams.filter(s => s.status === 'stopped').length
   const errors        = streams.filter(s => s.status === 'error').length
-  const runningStreams = streams.filter(s => s.status === 'running')
-  const gpuStreams     = runningStreams.filter(s => s.video_codec.includes('nvenc') || s.video_codec.includes('qsv'))
+  const gpuStreams = streams.filter(s => s.status === 'running' && (s.video_codec.includes('nvenc') || s.video_codec.includes('qsv')))
 
   function fmtNet(mbps: number) {
     if (mbps >= 1000) return `${(mbps / 1000).toFixed(1)} Gbps`
@@ -256,94 +254,6 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* ── Running streams ── */}
-            <div style={{ marginTop: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                <div className="section-title" style={{ marginBottom: 0 }}>Streams ativos</div>
-                <NavLink to="/streams" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--accent)' }}>
-                  Ver todos <FiArrowRight size={12} />
-                </NavLink>
-              </div>
-
-              {runningStreams.length === 0 ? (
-                <div className="card" style={{ padding: 0 }}>
-                  <div className="empty-state">
-                    <FiVideo size={48} color="var(--text3)" style={{ opacity: 0.4 }} />
-                    <p>Nenhum stream ativo no momento.</p>
-                    <NavLink to="/streams" className="btn btn-ghost btn-sm">
-                      Gerenciar Streams
-                    </NavLink>
-                  </div>
-                </div>
-              ) : (
-                <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Nome</th>
-                          <th className="col-hide-xs">ID</th>
-                          <th className="col-hide-xs">Codec</th>
-                          <th>Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {runningStreams.map(s => (
-                          <tr key={s.id}>
-                            <td>
-                              <div style={{ fontWeight: 500, color: 'var(--text)' }}>{s.name}</div>
-                              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {s.url.length > 60 ? s.url.slice(0, 60) + '…' : s.url}
-                              </div>
-                            </td>
-                            <td className="col-hide-xs">
-                              <code style={{ fontSize: 12, color: 'var(--text2)' }}>{s.id}</code>
-                            </td>
-                            <td className="col-hide-xs">
-                              <span style={{ fontSize: 12, color: 'var(--text2)' }}>{s.video_codec}</span>
-                            </td>
-                            <td>
-                              <span className="badge badge-running">running</span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* ── Error streams ── */}
-            {errors > 0 && (
-              <div style={{ marginTop: 20 }}>
-                <div className="section-title">Streams com erro</div>
-                <div className="card" style={{ padding: 0, overflow: 'hidden', borderColor: 'rgba(239,68,68,.3)' }}>
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Nome</th>
-                          <th className="col-hide-xs">ID</th>
-                          <th>Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {streams.filter(s => s.status === 'error').map(s => (
-                          <tr key={s.id}>
-                            <td style={{ fontWeight: 500, color: 'var(--text)' }}>{s.name}</td>
-                            <td className="col-hide-xs">
-                              <code style={{ fontSize: 12, color: 'var(--text2)' }}>{s.id}</code>
-                            </td>
-                            <td><span className="badge badge-error">● error</span></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            )}
           </>
         )}
       </div>

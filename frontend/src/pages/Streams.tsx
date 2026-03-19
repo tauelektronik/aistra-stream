@@ -760,36 +760,42 @@ export default function Streams() {
         </div>
       </div>
 
-      {/* Search bar */}
-      <div style={{ padding:'0 0 12px', display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
-        <input
-          type="search"
-          placeholder="Buscar stream por nome ou ID…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{ flex:1, minWidth:200, maxWidth:380 }}
-        />
-        {categories.length > 0 && (
-          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+      {/* Search + Categories */}
+      <div style={{ marginBottom:12 }}>
+        <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom: categories.length > 0 ? 8 : 0 }}>
+          <input
+            type="search"
+            placeholder="Buscar stream por nome ou ID…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{ flex:1, minWidth:200, maxWidth:380 }}
+          />
+        </div>
+        {/* Category tabs — always show row so user knows the feature exists */}
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
+          <button
+            className={`btn btn-sm${!activeCategory ? ' btn-primary' : ' btn-ghost'}`}
+            onClick={() => setActiveCategory(null)}
+            style={{ fontSize:12 }}
+          >
+            Todas ({streams.length})
+          </button>
+          {categories.map(cat => (
             <button
-              className={`btn btn-sm${!activeCategory ? ' btn-primary' : ' btn-ghost'}`}
-              onClick={() => setActiveCategory(null)}
+              key={cat}
+              className={`btn btn-sm${activeCategory === cat ? ' btn-primary' : ' btn-ghost'}`}
+              onClick={() => setActiveCategory(activeCategory === cat ? null : cat)}
               style={{ fontSize:12 }}
             >
-              Todas
+              {cat} ({streams.filter(s => s.category === cat).length})
             </button>
-            {categories.map(cat => (
-              <button
-                key={cat}
-                className={`btn btn-sm${activeCategory === cat ? ' btn-primary' : ' btn-ghost'}`}
-                onClick={() => setActiveCategory(activeCategory === cat ? null : cat)}
-                style={{ fontSize:12 }}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
-        )}
+          ))}
+          {canEdit && categories.length === 0 && streams.length > 0 && (
+            <span style={{ fontSize:11, color:'var(--text3)', fontStyle:'italic' }}>
+              Edite um stream e defina uma Categoria para filtrar aqui
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="page-content">

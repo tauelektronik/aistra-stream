@@ -21,7 +21,7 @@ interface Stream {
   output_rtmp?: string; output_udp?: string
   proxy?: string; user_agent?: string; backup_urls?: string
   output_qualities?: string; audio_track?: number
-  category?: string
+  category?: string; channel_num?: number | null
   enabled: boolean; status: string
   created_at: string; updated_at: string
 }
@@ -41,7 +41,7 @@ const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
   output_rtmp:'', output_udp:'',
   proxy:'', user_agent:'', backup_urls:'',
   output_qualities:'', audio_track:0,
-  category:'',
+  category:'', channel_num: null,
   enabled:true,
 }
 
@@ -312,10 +312,24 @@ function StreamModal({ stream, onSave, onClose }: {
 
         <div className="modal-body">
           {tab === 'source' && <>
-            <Row label="ID do Stream" hint="Apenas letras, números, _ e - (não pode alterar depois de criado)">
-              <input value={form.id} onChange={e => set('id', e.target.value)}
-                     disabled={!isNew} placeholder="globo_hd" />
-            </Row>
+            <div style={{ display:'flex', gap:12 }}>
+              <div style={{ width:110, flexShrink:0 }}>
+                <Row label="Nº Canal" hint="Número do canal — gerado automaticamente, editável">
+                  <input
+                    type="number" min={1} max={99999}
+                    value={form.channel_num ?? ''}
+                    onChange={e => set('channel_num', e.target.value === '' ? null : parseInt(e.target.value))}
+                    placeholder="Auto"
+                  />
+                </Row>
+              </div>
+              <div style={{ flex:1 }}>
+                <Row label="ID do Stream" hint="Apenas letras, números, _ e - (identificador interno único)">
+                  <input value={form.id} onChange={e => set('id', e.target.value)}
+                         disabled={!isNew} placeholder="globo_hd" />
+                </Row>
+              </div>
+            </div>
             <Row label="Nome"><input value={form.name} onChange={e => set('name', e.target.value)} placeholder="Globo HD" /></Row>
             <Row label="Categoria" hint="Agrupa os streams por categoria (ex: Esportes, Notícias, Filmes)">
               <input value={form.category ?? ''} onChange={e => set('category', e.target.value)} placeholder="Ex: Esportes" />
@@ -920,9 +934,9 @@ export default function Streams() {
             <table>
               <thead>
                 <tr>
-                  <th style={{ width:40 }}></th>
+                  <th style={{ width:44, textAlign:'center' }}>Nº</th>
+                  <th style={{ width:44 }}></th>
                   <th>Nome</th>
-                  <th className="col-hide-xs">ID</th>
                   <th className="col-hide-xs">DRM</th>
                   <th className="col-hide-xs">Codec</th>
                   <th className="col-hide-xs">Buffer</th>
@@ -937,6 +951,12 @@ export default function Streams() {
                   </td></tr>
                 ) : filteredStreams.map(s => (
                   <tr key={s.id}>
+                    {/* Channel number */}
+                    <td style={{ textAlign:'center', padding:'4px 6px' }}>
+                      <span style={{ fontSize:13, fontWeight:600, color:'var(--text2)', fontVariantNumeric:'tabular-nums' }}>
+                        {s.channel_num ?? '—'}
+                      </span>
+                    </td>
                     {/* Thumbnail */}
                     <td style={{ padding:'4px 8px' }}>
                       {thumbnails[s.id] ? (
@@ -973,7 +993,6 @@ export default function Streams() {
                       </div>
                       <StatsLine id={s.id} streamRunning={s.status === 'running'} />
                     </td>
-                    <td className="col-hide-xs"><code style={{ fontSize:12, color:'var(--text2)' }}>{s.id}</code></td>
                     <td className="col-hide-xs">
                       {s.drm_type === 'cenc-ctr'
                         ? <span className="badge" style={{ background:'#1e1b4b', color:'#818cf8' }}>CENC-CTR</span>

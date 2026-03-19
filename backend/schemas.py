@@ -178,6 +178,7 @@ class StreamBase(BaseModel):
     user_agent:       Optional[str] = None   # custom User-Agent header
     backup_urls:      Optional[str] = None   # newline-separated fallback URLs (failover/balance)
     category:         Optional[str] = None   # free-form grouping tag, e.g. "Esportes"
+    channel_num:      Optional[int] = Field(None, ge=1, le=99999)  # user-assigned channel number
     enabled:          bool = True
 
     @field_validator("url")
@@ -231,8 +232,9 @@ class StreamUpdate(StreamBase):
     enabled: Optional[bool] = None
 
 class StreamOut(StreamBase):
-    id:         str
-    created_at: datetime
-    updated_at: datetime
-    status:     str = "stopped"   # injected at runtime from HLS manager
+    id:          str
+    channel_num: Optional[int] = None
+    created_at:  datetime
+    updated_at:  datetime
+    status:      str = "stopped"   # injected at runtime from HLS manager
     class Config: from_attributes = True

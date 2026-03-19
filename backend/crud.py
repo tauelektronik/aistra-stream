@@ -2,7 +2,7 @@
 CRUD operations for User and Stream models.
 """
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, func
 from typing import List, Optional
 
 from backend.models import User, Stream, Category
@@ -68,7 +68,13 @@ async def get_stream(db: AsyncSession, stream_id: str) -> Optional[Stream]:
     return result.scalar_one_or_none()
 
 async def create_stream(db: AsyncSession, data: StreamCreate) -> Stream:
-    stream = Stream(**data.model_dump())
+    d = data.model_dump()
+    # Auto-assign channel_num if not provided (max existing + 1)
+    if d.get("channel_num") is None:
+        result = await db.execute(select(func.max(Stream.channel_num)))
+        max_num = result.scalar_one_or_none() or 0
+        d["channel_num"] = max_num + 1
+    stream = Stream(**d)
     db.add(stream)
     await db.commit()
     await db.refresh(stream)

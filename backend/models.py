@@ -109,6 +109,9 @@ class Stream(Base):
     # Category / grouping
     category      : Mapped[str|None] = mapped_column(String(100), nullable=True)   # e.g. "Esportes", "Notícias"
 
+    # Channel ordering
+    channel_num   : Mapped[int|None] = mapped_column(Integer, nullable=True, unique=True)  # user-assigned channel number
+
     # Metadata
     enabled       : Mapped[bool]     = mapped_column(Boolean, default=True)
     created_at    : Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

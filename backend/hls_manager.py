@@ -73,11 +73,16 @@ _QUALITY_PRESETS = {
 
 
 def _alloc_port() -> int:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.bind(("127.0.0.1", 0))
+        p = s.getsockname()[1]
+        s.close()
+        if not p:
+            raise OSError("OS returned port 0")
+        return p
+    except Exception as exc:
+        raise OSError(f"Cannot allocate ephemeral port: {exc}") from exc
 
 
 def _safe_id(stream_id: str) -> str:

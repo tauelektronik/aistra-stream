@@ -66,6 +66,8 @@ def _validate_stream_url(v: Optional[str]) -> Optional[str]:
         return v
     if len(v) > 2048:
         raise ValueError("URL muito longa (máx 2048 caracteres)")
+    if any(c in v for c in '\n\r\0\t'):
+        raise ValueError("URL não pode conter quebras de linha ou caracteres de controle")
     try:
         parsed = urlparse(v)
         if parsed.scheme.lower() not in _ALLOWED_SCHEMES:

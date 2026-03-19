@@ -684,11 +684,15 @@ export default function Streams() {
         signal: ctrl.signal,
       }).then(async r => {
         if (r.ok && !ctrl.signal.aborted) {
-          const blob = await r.blob()
-          setThumbnails(prev => {
-            if (prev[s.id]) URL.revokeObjectURL(prev[s.id])
-            return { ...prev, [s.id]: URL.createObjectURL(blob) }
-          })
+          try {
+            const blob = await r.blob()
+            if (!ctrl.signal.aborted) {
+              setThumbnails(prev => {
+                if (prev[s.id]) URL.revokeObjectURL(prev[s.id])
+                return { ...prev, [s.id]: URL.createObjectURL(blob) }
+              })
+            }
+          } catch { /* blob read failed — keep existing thumbnail */ }
         }
       }).catch(() => {})
     }
@@ -726,13 +730,16 @@ export default function Streams() {
 
   // Refresh thumbnails for running streams every 15s
   useEffect(() => {
-    let ctrl: AbortController | null = null
+    let activeCtrl: AbortController | null = null
     const t = setInterval(async () => {
-      ctrl?.abort()
-      ctrl = new AbortController()
+      // Abort previous batch and get a local reference for this tick
+      activeCtrl?.abort()
+      const ctrl = new AbortController()
+      activeCtrl = ctrl
       const token   = localStorage.getItem('token') ?? ''
       const running = streams.filter(s => s.status === 'running')
       for (const s of running) {
+        if (ctrl.signal.aborted) break
         try {
           const r = await fetch(`/api/streams/${s.id}/thumbnail?t=${Date.now()}`, {
             headers: { Authorization: `Bearer ${token}` },
@@ -740,15 +747,17 @@ export default function Streams() {
           })
           if (r.ok && !ctrl.signal.aborted) {
             const blob = await r.blob()
-            setThumbnails(prev => {
-              if (prev[s.id]) URL.revokeObjectURL(prev[s.id])
-              return { ...prev, [s.id]: URL.createObjectURL(blob) }
-            })
+            if (!ctrl.signal.aborted) {
+              setThumbnails(prev => {
+                if (prev[s.id]) URL.revokeObjectURL(prev[s.id])
+                return { ...prev, [s.id]: URL.createObjectURL(blob) }
+              })
+            }
           }
-        } catch { /* ignore */ }
+        } catch { /* ignore AbortError and network errors */ }
       }
     }, 15000)
-    return () => { clearInterval(t); ctrl?.abort() }
+    return () => { clearInterval(t); activeCtrl?.abort() }
   }, [streams])
 
   async function stopStream(id: string) {

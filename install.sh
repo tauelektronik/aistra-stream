@@ -17,9 +17,15 @@ PROJECT_DIR="/opt/aistra-stream"
 
 # ── Token GitHub (read-only, repositório aistra-stream) ───────
 # Fine-grained PAT com permissão "Contents: Read-only" no repo.
-# Para rotacionar: gere novo token em GitHub → Settings → Developer settings
-#                  → Fine-grained tokens e atualize aqui + no raw URL acima.
-GH_TOKEN="COLE_SEU_GITHUB_PAT_AQUI"
+# Passe via variável de ambiente para não expor em disco:
+#   export GH_TOKEN=ghp_xxxx && sudo -E bash install.sh
+# Ou inline: GH_TOKEN=ghp_xxxx sudo -E bash install.sh
+GH_TOKEN="${GH_TOKEN:-}"
+if [ -z "$GH_TOKEN" ]; then
+    err "GH_TOKEN não definido. Configure antes de executar:
+  export GH_TOKEN=ghp_xxxx
+  sudo -E bash install.sh"
+fi
 GIT_REPO="https://${GH_TOKEN}@github.com/tauelektronik/aistra-stream.git"
 PORT=8001
 DB_NAME="aistra_stream"

@@ -52,6 +52,10 @@ async def delete_user(db: AsyncSession, user_id: int) -> bool:
     user = await get_user(db, user_id)
     if not user:
         return False
+    if user.role == "admin":
+        result = await db.execute(select(func.count(User.id)).where(User.role == "admin", User.active == True))
+        if (result.scalar() or 0) <= 1:
+            raise ValueError("Não é possível deletar o único administrador ativo")
     await db.delete(user)
     await db.commit()
     return True

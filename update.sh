@@ -11,8 +11,14 @@ set -e
 PROJECT_DIR="/opt/aistra-stream"
 PORT=${PORT:-8001}
 
-# Token GitHub read-only para repositório privado
-GH_TOKEN="COLE_SEU_GITHUB_PAT_AQUI"
+# Token GitHub read-only — passe via env var (nunca hardcode):
+#   export GH_TOKEN=ghp_xxxx && sudo -E bash update.sh
+GH_TOKEN="${GH_TOKEN:-}"
+if [ -z "$GH_TOKEN" ]; then
+    err "GH_TOKEN não definido. Configure antes de executar:
+  export GH_TOKEN=ghp_xxxx
+  sudo -E bash update.sh"
+fi
 GIT_REPO="https://${GH_TOKEN}@github.com/tauelektronik/aistra-stream.git"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'

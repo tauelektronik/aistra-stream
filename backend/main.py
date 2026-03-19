@@ -173,10 +173,8 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
     _check_rate_limit(client_ip)
 
     user = await get_user_by_username(db, body.username)
-    if not user or not verify_password(body.password, user.password_hash):
+    if not user or not verify_password(body.password, user.password_hash) or not user.active:
         raise HTTPException(status_code=401, detail="Usuário ou senha incorretos")
-    if not user.active:
-        raise HTTPException(status_code=403, detail="Usuário desativado")
     token = create_access_token({"sub": user.username, "role": user.role})
     return TokenResponse(access_token=token)
 
@@ -233,7 +231,11 @@ async def api_delete_user(
     db: AsyncSession = Depends(get_db),
     actor=Depends(require_admin),
 ):
-    if not await delete_user(db, user_id):
+    try:
+        deleted = await delete_user(db, user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if not deleted:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
     audit.info("USER_DELETE actor=%s target_id=%s ip=%s",
                actor.username, user_id,
@@ -567,22 +569,25 @@ async def api_update_category(
     db: AsyncSession = Depends(get_db),
     _=Depends(require_operator),
 ):
-    # If renaming, update streams too
+    # If renaming, update category + all streams atomically in one transaction
+    from sqlalchemy import update as sa_update
+    from backend.models import Stream as StreamModel
     cat = await get_category(db, cat_id)
     if not cat:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
     old_name = cat.name
-    updated = await update_category(db, cat_id, body)
+    if body.name is not None:
+        cat.name = body.name
+    # Rename streams in the same transaction (before commit)
     if body.name and body.name != old_name:
-        # Rename category in all streams
-        from sqlalchemy import update as sa_update
-        from backend.models import Stream as StreamModel
         await db.execute(
-            sa_update(StreamModel).where(StreamModel.category == old_name).values(category=body.name)
+            sa_update(StreamModel)
+            .where(StreamModel.category == old_name)
+            .values(category=body.name)
         )
-        await db.commit()
-        await db.refresh(updated)
-    return updated
+    await db.commit()
+    await db.refresh(cat)
+    return cat
 
 
 @app.delete("/api/categories/{cat_id}", status_code=204)

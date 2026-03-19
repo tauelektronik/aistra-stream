@@ -5,10 +5,14 @@ import os
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
-DB_URL = os.getenv(
-    "DATABASE_URL",
-    "mysql+aiomysql://aistra:aistra123@localhost:3306/aistra_stream"
-)
+_DB_DEFAULT = "mysql+aiomysql://aistra:aistra123@localhost:3306/aistra_stream"
+DB_URL = os.getenv("DATABASE_URL", _DB_DEFAULT)
+if DB_URL == _DB_DEFAULT:
+    import logging as _log
+    _log.getLogger(__name__).warning(
+        "DATABASE_URL not set — using default credentials. "
+        "Set DATABASE_URL in .env for production."
+    )
 
 engine = create_async_engine(
     DB_URL,

@@ -129,10 +129,12 @@ app = FastAPI(
 # CORS — configurable via env (comma-separated list)
 # Default: allow same-origin + localhost dev server
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "")
-ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()] or [
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip() and o.strip() != "*"] or [
     "http://localhost:5173",   # Vite dev server
     "http://localhost:8001",   # Local production
 ]
+if "*" in (os.getenv("ALLOWED_ORIGINS", "") or ""):
+    logger.warning("ALLOWED_ORIGINS contained '*' — wildcard CORS rejected for security")
 
 app.add_middleware(
     CORSMiddleware,
@@ -336,6 +338,7 @@ async def api_delete_stream(
     actor=Depends(require_operator),
 ):
     await hls_manager.stop_session(stream_id)
+    hls_manager.cleanup_stream_data(stream_id)
     # Cascade: delete thumbnail
     from backend.hls_manager import THUMBNAILS_BASE
     sid = re.sub(r"[^a-zA-Z0-9_-]", "_", stream_id)

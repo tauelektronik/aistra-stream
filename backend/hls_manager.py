@@ -419,6 +419,34 @@ class HLSManager:
             self._starting.discard(stream_id)
             await self._kill_session(stream_id)
 
+    def cleanup_stream_data(self, stream_id: str):
+        """Remove all on-disk artifacts and in-memory state for a deleted stream.
+        Call after stop_session() when the stream is permanently deleted.
+        """
+        sid = _safe_id(stream_id)
+        # Remove HLS directory
+        hls_dir = os.path.join(HLS_BASE, stream_id)
+        if os.path.isdir(hls_dir):
+            try:
+                shutil.rmtree(hls_dir, ignore_errors=True)
+            except OSError:
+                pass
+        # Remove log and progress files
+        for path in (
+            f"/tmp/ffmpeg_{sid}.log",
+            f"/tmp/n_m3u8dl_{sid}.log",
+            f"/tmp/ffmpeg_progress_{sid}.txt",
+        ):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        # Clear ban state and URL cooldowns
+        self._ban_status.pop(stream_id, None)
+        keys = [k for k in self._ban_url_cooldown if k.startswith(f"{stream_id}:")]
+        for k in keys:
+            self._ban_url_cooldown.pop(k, None)
+
     async def get_status(self, stream_id: str) -> str:
         sess = self._sessions.get(stream_id)
         if not sess:

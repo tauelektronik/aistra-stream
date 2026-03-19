@@ -136,6 +136,9 @@ def _validate_proxy(v: Optional[str]) -> Optional[str]:
             )
         if not parsed.hostname:
             raise ValueError("Proxy deve ter um hostname")
+        port = parsed.port
+        if port is not None and not (1 <= port <= 65535):
+            raise ValueError(f"Porta de proxy inválida: {port}")
     except ValueError:
         raise
     except Exception:
@@ -224,8 +227,11 @@ class StreamBase(BaseModel):
     @field_validator("user_agent")
     @classmethod
     def check_user_agent(cls, v):
-        if v and len(v) > 500:
-            raise ValueError("User-Agent muito longo (máx 500 caracteres)")
+        if v:
+            if len(v) > 500:
+                raise ValueError("User-Agent muito longo (máx 500 caracteres)")
+            if any(c in v for c in ('\x00', '\n', '\r')):
+                raise ValueError("User-Agent contém caracteres de controle inválidos")
         return v
 
     @field_validator("backup_urls")

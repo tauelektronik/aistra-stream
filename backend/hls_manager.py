@@ -42,6 +42,8 @@ MAX_RESTARTS      = int(os.getenv("HLS_MAX_RESTARTS",      "5"))
 WATCHDOG_INTERVAL = int(os.getenv("HLS_WATCHDOG_INTERVAL", "10"))
 RESTART_DELAY_S   = int(os.getenv("HLS_RESTART_DELAY",     "15"))
 STABLE_RUN_S      = int(os.getenv("HLS_STABLE_RUN",        "60"))  # reset count after this many seconds running
+STALL_CHECKS      = int(os.getenv("HLS_STALL_CHECKS",       "3"))  # consecutive 0-bitrate polls before restart
+YT_REFRESH_H      = float(os.getenv("HLS_YT_REFRESH_H",   "4.0")) # proactive YouTube URL refresh (hours)
 
 # Telegram
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -318,6 +320,7 @@ class HLSManager:
         self._url_idx:         dict = {}   # stream_id → current URL index
         self._restart_counts:  dict = {}   # stream_id → consecutive restart count
         self._last_restart:    dict = {}   # stream_id → timestamp of last restart
+        self._stall_counts:    dict = {}   # stream_id → consecutive zero-bitrate poll count
         self._recordings:      dict = {}   # stream_id → {proc, path, started_at}
         self._lock            = asyncio.Lock()
         self._cleanup_task:   Optional[asyncio.Task] = None
@@ -695,17 +698,26 @@ class HLSManager:
         sid      = _safe_id(stream.id)
         playlist = os.path.join(hls_dir, "stream.m3u8")
 
+        # VOD: file:// → local path
+        is_vod     = stream.stream_type == "vod" or url.startswith("file://")
+        local_path = None
+        if url.startswith("file://"):
+            local_path = url[7:]   # strip "file://"
+            if not os.path.isfile(local_path):
+                raise FileNotFoundError(f"Arquivo não encontrado: {local_path}")
+
         qualities = [q.strip() for q in (stream.output_qualities or "").split(",") if q.strip()]
         if qualities:
-            ff_args = _build_ffmpeg_multi_quality_args(stream, hls_dir, url, qualities)
+            ff_args = _build_ffmpeg_multi_quality_args(stream, hls_dir, local_path or url, qualities)
         else:
-            active_url = url
+            active_url = local_path or url
             target_h   = _height_from_resolution(stream.video_resolution)
 
-            if _YT_RE.search(url):
-                active_url = await _resolve_youtube_url(url, target_h or 720)
-            elif stream.video_codec == "copy" and target_h:
-                active_url = await _resolve_hls_variant(url, target_h)
+            if not local_path:
+                if _YT_RE.search(url):
+                    active_url = await _resolve_youtube_url(url, target_h or 720)
+                elif stream.video_codec == "copy" and target_h:
+                    active_url = await _resolve_hls_variant(url, target_h)
 
             ff_bin = FFMPEG7 if os.path.exists(FFMPEG7) else FFMPEG
             is_yt  = _YT_RE.search(url)
@@ -717,7 +729,10 @@ class HLSManager:
                 "-analyzeduration", "3000000",
                 "-probesize",       "5000000",
             ]
-            if not is_yt:
+            # VOD: loop the file
+            if is_vod and local_path:
+                ff_args += ["-stream_loop", "-1"]
+            elif not is_yt:
                 ff_args += [
                     "-reconnect",            "1",
                     "-reconnect_at_eof",     "1",
@@ -827,62 +842,104 @@ class HLSManager:
                 async with self._lock:
                     await self._kill_session(sid)
 
-    # ── Watchdog (auto-restart) ───────────────────────────────────────────────
+    # ── Watchdog (auto-restart + stall detection + YouTube refresh) ──────────
 
     async def _watchdog_loop(self):
         while True:
             await asyncio.sleep(WATCHDOG_INTERVAL)
             now = asyncio.get_event_loop().time()
 
-            # Reset restart count for streams running stably
+            to_restart: list[tuple[str, object, int, str]] = []  # (sid, stream, count, reason)
+
             for sid, sess in list(self._sessions.items()):
-                if sess["proc"].returncode is None:
-                    started = sess.get("started_at", now)
-                    if (now - started > STABLE_RUN_S
-                            and self._restart_counts.get(sid, 0) > 0):
+                proc    = sess["proc"]
+                stream  = sess.get("stream")
+                started = sess.get("started_at", now)
+                uptime  = now - started
+
+                # ── Process still running ─────────────────────────────────
+                if proc.returncode is None:
+                    # Reset restart count after stable run
+                    if uptime > STABLE_RUN_S and self._restart_counts.get(sid, 0) > 0:
                         logger.info("Stream %s: stable for %ds — reset restart count", sid, STABLE_RUN_S)
                         self._restart_counts[sid] = 0
+                        self._stall_counts[sid]   = 0
 
-            # Find dead sessions that need restarting
-            to_restart = []
-            for sid, sess in list(self._sessions.items()):
-                if sess["proc"].returncode is None:
-                    continue                            # still running
+                    # ── Stall detection: zero bitrate for N consecutive polls ──
+                    if stream and uptime > 30:   # skip first 30s (startup)
+                        stats = _parse_progress_file(f"/tmp/ffmpeg_progress_{_safe_id(sid)}.txt")
+                        if not stats:
+                            stats = _parse_stats_from_log(f"/tmp/ffmpeg_{_safe_id(sid)}.log")
+                        kbps = 0.0
+                        if stats.get("bitrate"):
+                            m = re.search(r"([\d.]+)", stats["bitrate"])
+                            if m:
+                                v = float(m.group(1))
+                                kbps = v if v < 100000 else v / 1000
+                        if kbps < 1.0:
+                            cnt = self._stall_counts.get(sid, 0) + 1
+                            self._stall_counts[sid] = cnt
+                            if cnt >= STALL_CHECKS:
+                                logger.warning("Stream %s: stalled (%d consecutive 0-bitrate polls)", sid, cnt)
+                                last_restart = self._last_restart.get(sid, 0)
+                                if now - last_restart >= RESTART_DELAY_S:
+                                    count = self._restart_counts.get(sid, 0)
+                                    if count < MAX_RESTARTS:
+                                        to_restart.append((sid, stream, count, "stall"))
+                        else:
+                            self._stall_counts[sid] = 0
+
+                    # ── YouTube proactive URL refresh ─────────────────────
+                    if stream and _YT_RE.search(getattr(stream, "url", "")):
+                        yt_refresh_s = YT_REFRESH_H * 3600
+                        if uptime > yt_refresh_s:
+                            logger.info("Stream %s: YouTube URL refresh after %.1fh", sid, uptime / 3600)
+                            last_restart = self._last_restart.get(sid, 0)
+                            if now - last_restart >= RESTART_DELAY_S:
+                                count = self._restart_counts.get(sid, 0)
+                                to_restart.append((sid, stream, count, "yt_refresh"))
+
+                    continue  # still running — done
+
+                # ── Process dead ──────────────────────────────────────────
                 last_touch = sess.get("last_touch", 0)
                 if now - last_touch > 120:
-                    continue                            # idle — cleanup will handle it
+                    continue   # idle — cleanup will handle it
                 count = self._restart_counts.get(sid, 0)
                 if count >= MAX_RESTARTS:
-                    if count == MAX_RESTARTS:           # log once
+                    if count == MAX_RESTARTS:
                         logger.warning("Stream %s: max restarts (%d) reached, giving up", sid, MAX_RESTARTS)
-                        self._restart_counts[sid] = MAX_RESTARTS + 1  # mark as logged
+                        self._restart_counts[sid] = MAX_RESTARTS + 1
                     continue
                 last_restart = self._last_restart.get(sid, 0)
                 if now - last_restart < RESTART_DELAY_S:
-                    continue                            # too soon
-                stream = sess.get("stream")
+                    continue   # too soon
                 if stream:
-                    to_restart.append((sid, stream, count))
+                    to_restart.append((sid, stream, count, "crash"))
 
-            for sid, stream, count in to_restart:
-                logger.info("Watchdog: restarting stream %s (attempt %d/%d)",
-                            sid, count + 1, MAX_RESTARTS)
-                self._restart_counts[sid] = count + 1
+            for sid, stream, count, reason in to_restart:
+                reason_label = {"crash": "reiniciado", "stall": "reiniciado (stream travado)",
+                                "yt_refresh": "URL YouTube atualizada"}.get(reason, reason)
+                logger.info("Watchdog: %s stream %s (attempt %d/%d)", reason_label, sid, count + 1, MAX_RESTARTS)
+                if reason != "yt_refresh":
+                    self._restart_counts[sid] = count + 1
                 self._last_restart[sid]   = now
+                self._stall_counts[sid]   = 0
                 try:
-                    await self.get_hls_dir(stream)
-                    logger.info("Watchdog: stream %s restarted OK", sid)
+                    await self.get_hls_dir(stream, force_restart=(reason == "yt_refresh"))
+                    logger.info("Watchdog: stream %s %s OK", sid, reason_label)
                     asyncio.create_task(_send_telegram(
                         f"🔄 <b>aistra-stream</b>\n"
-                        f"Stream <code>{sid}</code> reiniciado automaticamente "
-                        f"(tentativa {count+1}/{MAX_RESTARTS})"
+                        f"Stream <code>{sid}</code> {reason_label}"
+                        + (f" (tentativa {count+1}/{MAX_RESTARTS})" if reason == "crash" else "")
                     ))
                 except Exception as exc:
                     logger.error("Watchdog: restart failed for %s: %s", sid, exc)
-                    asyncio.create_task(_send_telegram(
-                        f"❌ <b>aistra-stream</b>\n"
-                        f"Falha ao reiniciar stream <code>{sid}</code>: {exc}"
-                    ))
+                    if reason != "yt_refresh":
+                        asyncio.create_task(_send_telegram(
+                            f"❌ <b>aistra-stream</b>\n"
+                            f"Falha ao reiniciar stream <code>{sid}</code>: {exc}"
+                        ))
 
 
 # Singleton

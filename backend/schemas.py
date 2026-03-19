@@ -41,7 +41,7 @@ class UserUpdate(BaseModel):
 
 # ── Validators ────────────────────────────────────────────────────────────────
 
-_ALLOWED_SCHEMES = {"http", "https", "rtmp", "rtmps", "rtsp", "rtsps", "udp", "rtp", "srt"}
+_ALLOWED_SCHEMES = {"http", "https", "rtmp", "rtmps", "rtsp", "rtsps", "udp", "rtp", "srt", "file"}
 _PROXY_SCHEMES   = {"http", "https", "socks4", "socks5"}
 _HEX_RE = re.compile(r'^[0-9a-fA-F]+$')
 
@@ -56,6 +56,15 @@ def _validate_stream_url(v: Optional[str]) -> Optional[str]:
             raise ValueError(f"Protocolo não permitido: '{parsed.scheme}'. Use: {', '.join(sorted(_ALLOWED_SCHEMES))}")
         if ".." in (parsed.path or ""):
             raise ValueError("URL contém path traversal")
+        # Extra safety for file:// — reject paths outside /opt, /srv, /media, /mnt, /data, /home
+        if parsed.scheme.lower() == "file":
+            safe_prefixes = ("/opt/", "/srv/", "/media/", "/mnt/", "/data/", "/home/", "/var/")
+            path = parsed.path
+            if not any(path.startswith(p) for p in safe_prefixes):
+                raise ValueError(
+                    "file:// só é permitido para caminhos em: "
+                    + ", ".join(safe_prefixes)
+                )
     except ValueError:
         raise
     except Exception:

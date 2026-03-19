@@ -657,7 +657,7 @@ async def api_upload_logo(
     if not _valid_image_magic(data):
         raise HTTPException(status_code=400, detail="Arquivo não reconhecido como imagem válida.")
 
-    ext = content_type.split("/")[-1].replace("svg+xml", "svg")
+    ext = content_type.split(";")[0].strip().split("/")[-1].replace("svg+xml", "svg")
     filename = f"cat_{cat_id}.{ext}"
     # Remove old logo if different extension
     for old in [f for f in os.listdir(LOGOS_BASE) if f.startswith(f"cat_{cat_id}.")]:

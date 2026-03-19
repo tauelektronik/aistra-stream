@@ -46,8 +46,8 @@ def _open_log(path: str):
     try:
         if os.path.exists(path) and os.path.getsize(path) > _MAX_LOG_BYTES:
             open(path, "wb").close()
-    except OSError:
-        pass
+    except OSError as e:
+        logger.warning("Could not truncate log %s: %s", path, e)
     return open(path, "ab")
 
 
@@ -498,7 +498,7 @@ class HLSManager:
             sess = self._sessions.get(sid)
             if sess and not force_restart:
                 if sess["proc"].returncode is None:
-                    sess["last_touch"] = asyncio.get_running_loop().time()
+                    sess["last_touch"] = time.monotonic()
                     return sess["hls_dir"], None
                 # Process died — rotate URL for failover
                 _, urls = self._get_active_url(stream)
@@ -531,7 +531,7 @@ class HLSManager:
             return hls_dir, str(exc)
 
         # ── Phase 3: store session (fast, under lock) ─────────────────────────
-        now = asyncio.get_running_loop().time()
+        now = time.monotonic()
         sess["stream"]     = stream
         sess["started_at"] = now
         sess["last_touch"] = now
@@ -543,7 +543,7 @@ class HLSManager:
     def touch(self, stream_id: str):
         sess = self._sessions.get(stream_id)
         if sess:
-            sess["last_touch"] = asyncio.get_running_loop().time()
+            sess["last_touch"] = time.monotonic()
 
     async def get_stats(self, stream_id: str) -> dict:
         """Return latest ffmpeg stats for a stream."""
@@ -568,7 +568,7 @@ class HLSManager:
         # Uptime: prefer session start time; fall back to out_time_us from progress
         started = sess["started_at"] if sess else None
         if started:
-            uptime = int(asyncio.get_running_loop().time() - started)
+            uptime = int(time.monotonic() - started)
         else:
             try:
                 uptime = int(int(data.get("out_time_us", 0) or 0) / 1_000_000)
@@ -996,16 +996,21 @@ class HLSManager:
                 env[key] = stream.proxy
 
         ff_log  = _open_log(f"/tmp/ffmpeg_{sid}.log")
-        ff_proc = await asyncio.wait_for(
-            asyncio.create_subprocess_exec(
-                *ff_args,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=ff_log,
-                env=env,
-            ),
-            timeout=15,
-        )
+        try:
+            ff_proc = await asyncio.wait_for(
+                asyncio.create_subprocess_exec(
+                    *ff_args,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=ff_log,
+                    env=env,
+                ),
+                timeout=15,
+            )
+        except Exception:
+            try: ff_log.close()
+            except Exception: pass
+            raise
 
         return {
             "proc":       ff_proc,
@@ -1053,7 +1058,7 @@ class HLSManager:
     async def _cleanup_loop(self):
         while True:
             await asyncio.sleep(30)
-            now   = asyncio.get_running_loop().time()
+            now   = time.monotonic()
             stale = [sid for sid, s in list(self._sessions.items())
                      if now - s.get("last_touch", now) > 60]
             for sid in stale:
@@ -1069,7 +1074,7 @@ class HLSManager:
     async def _watchdog_loop(self):
         while True:
             await asyncio.sleep(WATCHDOG_INTERVAL)
-            now = asyncio.get_running_loop().time()
+            now = time.monotonic()
 
             to_restart: list[tuple[str, object, int, str]] = []  # (sid, stream, count, reason)
 

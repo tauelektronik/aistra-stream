@@ -231,6 +231,27 @@ async def api_list_streams(
     return result
 
 
+@app.get("/api/streams/export.m3u")
+async def export_m3u(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    """Export all enabled streams as an M3U playlist (HLS URLs)."""
+    streams = await list_streams(db)
+    base_url = str(request.base_url).rstrip("/")
+    lines = ["#EXTM3U"]
+    for s in streams:
+        if not s.enabled:
+            continue
+        group = s.category or "Sem Categoria"
+        lines.append(f'#EXTINF:-1 tvg-id="{s.id}" tvg-name="{s.name}" group-title="{group}",{s.name}')
+        lines.append(f"{base_url}/stream/{s.id}/hls/stream.m3u8")
+    content = "\r\n".join(lines) + "\r\n"
+    return Response(content, media_type="application/x-mpegurl",
+                    headers={"Content-Disposition": "attachment; filename=\"aistra.m3u\""})
+
+
 @app.post("/api/streams", response_model=StreamOut, status_code=201)
 async def api_create_stream(
     body: StreamCreate,
@@ -331,29 +352,6 @@ async def api_stream_log(
         content = f.read().decode("utf-8", errors="replace")
     tail = "\n".join(content.splitlines()[-lines:])
     return {"log": tail}
-
-
-# ── M3U export ────────────────────────────────────────────────────────────────
-
-@app.get("/api/streams/export.m3u")
-async def export_m3u(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
-):
-    """Export all enabled streams as an M3U playlist (HLS URLs)."""
-    streams = await list_streams(db)
-    base_url = str(request.base_url).rstrip("/")
-    lines = ["#EXTM3U"]
-    for s in streams:
-        if not s.enabled:
-            continue
-        group = s.category or "Sem Categoria"
-        lines.append(f'#EXTINF:-1 tvg-id="{s.id}" tvg-name="{s.name}" group-title="{group}",{s.name}')
-        lines.append(f"{base_url}/stream/{s.id}/hls/stream.m3u8")
-    content = "\r\n".join(lines) + "\r\n"
-    return Response(content, media_type="application/x-mpegurl",
-                    headers={"Content-Disposition": "attachment; filename=\"aistra.m3u\""})
 
 
 # ── App settings ──────────────────────────────────────────────────────────────

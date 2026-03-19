@@ -196,6 +196,17 @@ function LogModal({ streamId, onClose }: { streamId: string; onClose: () => void
   )
 }
 
+// ─── Tip: button tooltip ──────────────────────────────────────────────────────
+
+function Tip({ text, children }: { text: string; children: React.ReactNode }) {
+  return (
+    <span className="btn-tip">
+      {children}
+      <span className="tip-box">{text}</span>
+    </span>
+  )
+}
+
 // ─── Form helpers ─────────────────────────────────────────────────────────────
 
 function Row({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
@@ -503,6 +514,7 @@ function StreamModal({ stream, onSave, onClose }: {
 function RecordingsModal({ onClose }: { onClose: () => void }) {
   const [recs, setRecs]         = useState<any[]>([])
   const [loading, setLoading]   = useState(true)
+  const [error, setError]       = useState('')
   const [downloading, setDl]    = useState<string | null>(null)
 
   useEffect(() => {
@@ -512,7 +524,10 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
   }, [onClose])
 
   useEffect(() => {
-    api.get('/api/recordings').then(r => setRecs(r.data)).finally(() => setLoading(false))
+    api.get('/api/recordings')
+      .then(r => setRecs(r.data))
+      .catch(() => setError('Erro ao carregar gravações. Verifique se você tem permissão.'))
+      .finally(() => setLoading(false))
   }, [])
 
   function fmt(bytes: number) {
@@ -545,8 +560,14 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
         <div className="modal-body" style={{ minHeight:200 }}>
           {loading ? (
             <div style={{ color:'var(--text3)', textAlign:'center', padding:32 }}>Carregando…</div>
+          ) : error ? (
+            <div style={{ color:'var(--danger)', textAlign:'center', padding:32, fontSize:13 }}>{error}</div>
           ) : recs.length === 0 ? (
-            <div style={{ color:'var(--text3)', textAlign:'center', padding:32 }}>Nenhuma gravação encontrada.</div>
+            <div style={{ color:'var(--text3)', textAlign:'center', padding:32 }}>
+              <div style={{ fontSize:28, marginBottom:8 }}>📼</div>
+              Nenhuma gravação encontrada.<br />
+              <span style={{ fontSize:12 }}>Inicie uma gravação clicando no botão <FiCircle size={11} style={{ verticalAlign:'middle' }} /> em um stream ao vivo.</span>
+            </div>
           ) : (
             <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
               <thead>
@@ -591,6 +612,7 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
 export default function Streams() {
   const [streams, setStreams]         = useState<Stream[]>([])
   const [loading, setLoading]         = useState(true)
+  const [refreshing, setRefreshing]   = useState(false)
   const [editing, setEditing]         = useState<Stream | null | 'new'>(null)
   const [playing, setPlaying]         = useState<Stream | null>(null)
   const [logStream, setLogStream]     = useState<string | null>(null)
@@ -600,15 +622,20 @@ export default function Streams() {
   const [thumbnails, setThumbnails]   = useState<Record<string, string>>({})
   const [search, setSearch]           = useState('')
   const [activeCategory, setActiveCategory] = useState<string | null>(null)
+  const [m3uError, setM3uError]       = useState('')
 
   const user    = JSON.parse(localStorage.getItem('user') || '{}')
   const canEdit = user.role === 'admin' || user.role === 'operator'
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (manual = false) => {
+    if (manual) setRefreshing(true)
     try {
       const r = await api.get('/api/streams')
       setStreams(r.data)
-    } finally { setLoading(false) }
+    } finally {
+      setLoading(false)
+      if (manual) setRefreshing(false)
+    }
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -734,28 +761,43 @@ export default function Streams() {
       <div className="page-header">
         <h1>Streams</h1>
         <div className="page-header-actions">
-          <button className="btn btn-ghost btn-sm" onClick={() => setShowRecs(true)}>
-            <FiDownload size={13} /> Gravações
-          </button>
-          <button className="btn btn-ghost btn-sm" title="Baixar lista M3U com todos os streams"
-            onClick={async () => {
-              const res = await fetch('/api/streams/export.m3u', {
-                headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-              })
-              if (!res.ok) return
-              const blob = await res.blob()
-              const url  = URL.createObjectURL(blob)
-              const a    = document.createElement('a')
-              a.href = url; a.download = 'aistra.m3u'; a.click()
-              URL.revokeObjectURL(url)
-            }}>
-            <FiExternalLink size={13} /> M3U
-          </button>
-          <button className="btn btn-ghost btn-sm" onClick={load}><FiRefreshCw size={13} /> Atualizar</button>
-          {canEdit && (
-            <button className="btn btn-primary btn-sm" onClick={() => setEditing('new')}>
-              <FiPlus size={13} /> Novo Stream
+          <Tip text="Ver e baixar gravações feitas de streams ao vivo">
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowRecs(true)}>
+              <FiDownload size={13} /> Gravações
             </button>
+          </Tip>
+          <Tip text={m3uError || "Baixar lista M3U com todos os streams ativos. Use em players como VLC, Kodi, TiviMate."}>
+            <button className="btn btn-ghost btn-sm"
+              onClick={async () => {
+                setM3uError('')
+                try {
+                  const res = await fetch('/api/streams/export.m3u', {
+                    headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+                  })
+                  if (!res.ok) { setM3uError(`Erro ${res.status} ao gerar M3U`); return }
+                  const blob = await res.blob()
+                  const url  = URL.createObjectURL(blob)
+                  const a    = document.createElement('a')
+                  a.href = url; a.download = 'aistra.m3u'; a.click()
+                  URL.revokeObjectURL(url)
+                } catch { setM3uError('Falha ao baixar M3U') }
+              }}
+              style={m3uError ? { color: 'var(--danger)' } : undefined}>
+              <FiExternalLink size={13} /> M3U
+            </button>
+          </Tip>
+          <Tip text="Recarregar a lista de streams e status de cada um">
+            <button className="btn btn-ghost btn-sm" onClick={() => load(true)} disabled={refreshing}>
+              <FiRefreshCw size={13} style={refreshing ? { animation:'spin 1s linear infinite' } : undefined} />
+              {refreshing ? 'Atualizando…' : 'Atualizar'}
+            </button>
+          </Tip>
+          {canEdit && (
+            <Tip text="Adicionar um novo stream ao painel">
+              <button className="btn btn-primary btn-sm" onClick={() => setEditing('new')}>
+                <FiPlus size={13} /> Novo Stream
+              </button>
+            </Tip>
           )}
         </div>
       </div>
@@ -913,38 +955,51 @@ export default function Streams() {
                     <td><StatusBadge status={s.status} /></td>
                     <td>
                       <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
-                        <button className="btn btn-success btn-sm" title="Assistir" onClick={() => setPlaying(s)}>
-                          <FiPlay size={12} />
-                        </button>
+                        <Tip text="Assistir o stream no player integrado (inicia o processamento se necessário)">
+                          <button className="btn btn-success btn-sm" onClick={() => setPlaying(s)}>
+                            <FiPlay size={12} />
+                          </button>
+                        </Tip>
                         {s.status === 'running' && (
-                          <button className="btn btn-ghost btn-sm" title="Parar" onClick={() => stopStream(s.id)}>
-                            <FiSquare size={12} />
-                          </button>
+                          <Tip text="Parar o processamento deste stream (libera recursos do servidor)">
+                            <button className="btn btn-ghost btn-sm" onClick={() => stopStream(s.id)}>
+                              <FiSquare size={12} />
+                            </button>
+                          </Tip>
                         )}
-                        <button className="btn btn-ghost btn-sm" title="Log ao vivo" onClick={() => setLogStream(s.id)}>
-                          <FiTerminal size={12} />
-                        </button>
+                        <Tip text="Ver o log em tempo real do ffmpeg — útil para diagnosticar erros de stream">
+                          <button className="btn btn-ghost btn-sm" onClick={() => setLogStream(s.id)}>
+                            <FiTerminal size={12} />
+                          </button>
+                        </Tip>
                         {canEdit && s.status === 'running' && (
-                          <button
-                            className="btn btn-sm"
-                            title={recording[s.id] ? 'Parar gravação' : 'Gravar stream'}
-                            style={{ background: recording[s.id] ? 'rgba(239,68,68,.15)' : undefined, color: recording[s.id] ? 'var(--danger)' : undefined }}
-                            onClick={() => toggleRecord(s.id)}
-                          >
-                            <FiCircle size={12} style={{ fill: recording[s.id] ? 'currentColor' : 'none' }} />
-                          </button>
+                          <Tip text={recording[s.id] ? 'Parar a gravação e salvar o arquivo MP4' : 'Gravar o stream em arquivo MP4 no servidor'}>
+                            <button
+                              className="btn btn-sm"
+                              style={{ background: recording[s.id] ? 'rgba(239,68,68,.15)' : undefined, color: recording[s.id] ? 'var(--danger)' : undefined }}
+                              onClick={() => toggleRecord(s.id)}
+                            >
+                              <FiCircle size={12} style={{ fill: recording[s.id] ? 'currentColor' : 'none' }} />
+                            </button>
+                          </Tip>
                         )}
-                        <a href={getHlsUrl(s.id)} target="_blank" rel="noreferrer"
-                           className="btn btn-ghost btn-sm" title="Abrir URL HLS">
-                          <FiExternalLink size={12} />
-                        </a>
+                        <Tip text="Copiar / abrir a URL HLS direta (.m3u8) — use em VLC ou outros players">
+                          <a href={getHlsUrl(s.id)} target="_blank" rel="noreferrer"
+                             className="btn btn-ghost btn-sm">
+                            <FiExternalLink size={12} />
+                          </a>
+                        </Tip>
                         {canEdit && <>
-                          <button className="btn btn-ghost btn-sm" title="Editar" onClick={() => setEditing(s)}>
-                            <FiEdit2 size={12} />
-                          </button>
-                          <button className="btn btn-danger btn-sm" title="Deletar" onClick={() => deleteStream(s.id)}>
-                            <FiTrash2 size={12} />
-                          </button>
+                          <Tip text="Editar configurações do stream (fonte, codec, DRM, buffer, etc.)">
+                            <button className="btn btn-ghost btn-sm" onClick={() => setEditing(s)}>
+                              <FiEdit2 size={12} />
+                            </button>
+                          </Tip>
+                          <Tip text="Deletar este stream permanentemente">
+                            <button className="btn btn-danger btn-sm" onClick={() => deleteStream(s.id)}>
+                              <FiTrash2 size={12} />
+                            </button>
+                          </Tip>
                         </>}
                       </div>
                     </td>

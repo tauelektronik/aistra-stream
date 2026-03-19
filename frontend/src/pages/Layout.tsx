@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { FiGrid, FiVideo, FiUsers, FiLogOut, FiRadio, FiSettings, FiChevronRight, FiTag } from 'react-icons/fi'
+import { FiGrid, FiVideo, FiUsers, FiLogOut, FiRadio, FiSettings, FiChevronRight, FiTag, FiSun, FiMoon } from 'react-icons/fi'
 
 interface Category { id: number; name: string; logo_path: string | null }
 
@@ -9,6 +9,9 @@ export default function Layout() {
   const location = useLocation()
   const user     = JSON.parse(localStorage.getItem('user') || '{}')
   const [open, setOpen]               = useState(false)
+  const [theme, setTheme]             = useState<'dark'|'light'>(
+    () => (localStorage.getItem('theme') as 'dark'|'light') || 'dark'
+  )
   const [configOpen, setConfigOpen]   = useState(
     () => ['/settings', '/users', '/categories'].some(p => location.pathname.startsWith(p))
   )
@@ -16,6 +19,14 @@ export default function Layout() {
     () => location.pathname.startsWith('/streams')
   )
   const [cats, setCats] = useState<Category[]>([])
+
+  // Apply/persist theme
+  useEffect(() => {
+    document.documentElement.classList.toggle('light', theme === 'light')
+    localStorage.setItem('theme', theme)
+  }, [theme])
+
+  function toggleTheme() { setTheme(t => t === 'dark' ? 'light' : 'dark') }
 
   // Fetch categories for sidebar sub-menu (re-fetch on route change)
   useEffect(() => {
@@ -148,9 +159,18 @@ export default function Layout() {
               {user.role && <span className="sidebar-role">{user.role}</span>}
             </div>
           </div>
-          <button className="btn btn-ghost btn-sm" style={{ width: '100%', justifyContent: 'center' }} onClick={logout}>
-            <FiLogOut size={13} /> Sair
-          </button>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              className="theme-toggle"
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Mudar para tema claro' : 'Mudar para tema escuro'}
+            >
+              {theme === 'dark' ? <FiSun size={14} /> : <FiMoon size={14} />}
+            </button>
+            <button className="btn btn-ghost btn-sm" style={{ flex: 1, justifyContent: 'center' }} onClick={logout}>
+              <FiLogOut size={13} /> Sair
+            </button>
+          </div>
         </div>
       </aside>
 

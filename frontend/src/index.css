@@ -1,5 +1,6 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* ── Dark theme (default) ─────────────────────────────────────────────────── */
 :root {
   --bg:          #0a0c10;
   --bg2:         #111318;
@@ -21,9 +22,38 @@
   --shadow:      0 8px 32px rgba(0,0,0,.5);
   --shadow-sm:   0 2px 8px rgba(0,0,0,.3);
   --sidebar-w:   224px;
+  --sidebar-bg:  linear-gradient(180deg, #111318 0%, #0e1117 100%);
+  --badge-run-bg:  #064e3b;
+  --badge-stop-bg: #1e293b;
+  --badge-err-bg:  #450a0a;
 }
 
-html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; font-size: 14px; }
+/* ── Light theme ──────────────────────────────────────────────────────────── */
+html.light {
+  --bg:          #f0f4f8;
+  --bg2:         #ffffff;
+  --bg3:         #e8edf3;
+  --bg4:         #dde3ec;
+  --border:      #cbd5e1;
+  --border2:     #b0bccc;
+  --accent:      #2563eb;
+  --accent-dim:  #1d4ed8;
+  --accent-glow: rgba(37,99,235,.12);
+  --success:     #059669;
+  --warning:     #d97706;
+  --danger:      #dc2626;
+  --text:        #0f172a;
+  --text2:       #334155;
+  --text3:       #64748b;
+  --shadow:      0 8px 32px rgba(0,0,0,.10);
+  --shadow-sm:   0 2px 8px rgba(0,0,0,.06);
+  --sidebar-bg:  linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+  --badge-run-bg:  #d1fae5;
+  --badge-stop-bg: #f1f5f9;
+  --badge-err-bg:  #fee2e2;
+}
+
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; font-size: 14px; transition: background .2s, color .2s; }
 #root { height: 100%; }
 
 a { color: var(--accent); text-decoration: none; }
@@ -59,7 +89,7 @@ input:focus, select:focus, textarea:focus {
   white-space: nowrap;
 }
 .badge-running {
-  background: #064e3b;
+  background: var(--badge-run-bg);
   color: var(--success);
   position: relative;
 }
@@ -78,8 +108,8 @@ input:focus, select:focus, textarea:focus {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%       { opacity: .5; transform: scale(1.4); }
 }
-.badge-stopped { background: #1e293b; color: var(--text3); }
-.badge-error   { background: #450a0a; color: var(--danger); }
+.badge-stopped { background: var(--badge-stop-bg); color: var(--text3); }
+.badge-error   { background: var(--badge-err-bg);  color: var(--danger); }
 
 .btn {
   display: inline-flex; align-items: center; gap: 6px;
@@ -314,7 +344,7 @@ tr:hover td { background: rgba(59,130,246,.04); }
 .layout { display: flex; height: 100vh; overflow: hidden; }
 .sidebar {
   width: var(--sidebar-w); flex-shrink: 0;
-  background: linear-gradient(180deg, #111318 0%, #0e1117 100%);
+  background: var(--sidebar-bg);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
   transition: transform .25s ease;
@@ -470,3 +500,30 @@ tr:hover td { background: rgba(59,130,246,.04); }
 }
 
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* ── Theme toggle button ─────────────────────────────────────────────────── */
+.theme-toggle {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: var(--radius);
+  background: var(--bg4); border: 1px solid var(--border);
+  color: var(--text3); cursor: pointer; flex-shrink: 0;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
+
+/* Sidebar text in light mode stays white (dark sidebar) */
+html.light .sidebar-logo,
+html.light .nav-item,
+html.light .nav-group-header,
+html.light .sidebar-username,
+html.light .sidebar-role,
+html.light .sidebar-bottom { color: #94a3b8; }
+html.light .nav-item:hover,
+html.light .nav-group-header:hover { background: rgba(255,255,255,.08); color: #f1f5f9; }
+html.light .nav-item.active { color: #93c5fd; background: rgba(59,130,246,.2); border-right-color: #93c5fd; }
+html.light .sidebar { border-right-color: #0f172a; }
+html.light .sidebar-bottom { border-top-color: rgba(255,255,255,.1); }
+html.light .sidebar-logo { border-bottom-color: rgba(255,255,255,.1); color: #93c5fd; }
+html.light .sidebar-role { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.15); color: #94a3b8; }
+html.light .theme-toggle { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.15); color: #94a3b8; }
+html.light .theme-toggle:hover { color: #93c5fd; border-color: #93c5fd; }

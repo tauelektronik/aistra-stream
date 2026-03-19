@@ -247,10 +247,25 @@ class StreamUpdate(StreamBase):
     enabled: Optional[bool] = None
 
 class StreamOut(StreamBase):
+    """Output schema — validators are overridden to be permissive so that
+    existing DB rows with imperfect data (empty name, trailing whitespace in URL)
+    can still be serialized without crashing the list endpoint."""
     id:          str
-    name:        str = ""          # no min_length — existing DB rows may have empty name
+    name:        str = ""   # no min_length
+    url:         str = ""   # no format validation
     channel_num: Optional[int] = None
     created_at:  datetime
     updated_at:  datetime
     status:      str = "stopped"   # injected at runtime from HLS manager
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def check_name(cls, v):   # passthrough — strip only
+        return (v or "").strip()
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def check_url(cls, v):    # passthrough — strip only
+        return (v or "").strip()
+
     class Config: from_attributes = True

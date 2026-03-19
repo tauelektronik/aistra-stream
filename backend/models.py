@@ -37,6 +37,15 @@ class AudioCodec(str, enum.Enum):
     aac        = "aac"
 
 
+class Category(Base):
+    __tablename__ = "categories"
+
+    id         : Mapped[int]      = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name       : Mapped[str]      = mapped_column(String(100), unique=True, nullable=False)
+    logo_path  : Mapped[str|None] = mapped_column(String(500), nullable=True)   # filename in LOGOS_BASE dir
+    created_at : Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class User(Base):
     __tablename__ = "users"
 

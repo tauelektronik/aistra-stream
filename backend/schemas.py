@@ -39,6 +39,22 @@ class UserUpdate(BaseModel):
     password: Optional[str] = Field(None, min_length=8)
 
 
+# ── Categories ────────────────────────────────────────────────────────────────
+
+class CategoryOut(BaseModel):
+    id:         int
+    name:       str
+    logo_path:  Optional[str] = None
+    created_at: datetime
+    class Config: from_attributes = True
+
+class CategoryCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+class CategoryUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+
+
 # ── Validators ────────────────────────────────────────────────────────────────
 
 _ALLOWED_SCHEMES = {"http", "https", "rtmp", "rtmps", "rtsp", "rtsps", "udp", "rtp", "srt", "file"}

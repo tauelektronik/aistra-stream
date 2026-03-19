@@ -25,6 +25,10 @@ interface Stream {
   created_at: string; updated_at: string
 }
 
+interface Category {
+  id: number; name: string; logo_path: string | null
+}
+
 interface StreamStats {
   running: boolean; uptime_s: number
   fps: string; bitrate_kbps: number; frame: string; speed: string
@@ -620,9 +624,10 @@ export default function Streams() {
   const [recording, setRecording]     = useState<Record<string, boolean>>({})
   const [stats, setStats]             = useState<Record<string, StreamStats>>({})
   const [thumbnails, setThumbnails]   = useState<Record<string, string>>({})
-  const [search, setSearch]           = useState('')
+  const [search, setSearch]               = useState('')
   const [activeCategory, setActiveCategory] = useState<string | null>(null)
-  const [m3uError, setM3uError]       = useState('')
+  const [m3uError, setM3uError]           = useState('')
+  const [catMeta, setCatMeta]             = useState<Category[]>([])
 
   const user    = JSON.parse(localStorage.getItem('user') || '{}')
   const canEdit = user.role === 'admin' || user.role === 'operator'
@@ -640,6 +645,11 @@ export default function Streams() {
 
   useEffect(() => { load() }, [load])
   useEffect(() => { const t = setInterval(load, 10000); return () => clearInterval(t) }, [load])
+
+  // Load category metadata (logos) once
+  useEffect(() => {
+    api.get('/api/categories').then(r => setCatMeta(r.data)).catch(() => {})
+  }, [])
 
   // When streams list changes, load thumbnails + recording status for running streams immediately
   useEffect(() => {
@@ -822,16 +832,26 @@ export default function Streams() {
           >
             Todas ({streams.length})
           </button>
-          {categories.map(cat => (
-            <button
-              key={cat}
-              className={`btn btn-sm${activeCategory === cat ? ' btn-primary' : ' btn-ghost'}`}
-              onClick={() => setActiveCategory(activeCategory === cat ? null : cat)}
-              style={{ fontSize:12 }}
-            >
-              {cat} ({streams.filter(s => s.category === cat).length})
-            </button>
-          ))}
+          {categories.map(cat => {
+            const meta = catMeta.find(c => c.name === cat)
+            return (
+              <button
+                key={cat}
+                className={`btn btn-sm${activeCategory === cat ? ' btn-primary' : ' btn-ghost'}`}
+                onClick={() => setActiveCategory(activeCategory === cat ? null : cat)}
+                style={{ fontSize:12, display:'flex', alignItems:'center', gap:5 }}
+              >
+                {meta?.logo_path && (
+                  <img
+                    src={`/api/categories/${meta.id}/logo?t=${meta.logo_path}`}
+                    alt=""
+                    style={{ width:16, height:16, objectFit:'contain', borderRadius:2 }}
+                  />
+                )}
+                {cat} ({streams.filter(s => s.category === cat).length})
+              </button>
+            )
+          })}
           {canEdit && categories.length === 0 && streams.length > 0 && (
             <span style={{ fontSize:11, color:'var(--text3)', fontStyle:'italic' }}>
               Edite um stream e defina uma Categoria para filtrar aqui

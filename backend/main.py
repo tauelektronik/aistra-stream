@@ -11,7 +11,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,12 +24,15 @@ from backend.auth import (
 from backend.crud import (
     create_stream, create_user, delete_stream, delete_user, get_stream,
     get_user_by_username, list_streams, list_users, update_stream, update_user,
+    list_categories, get_category, get_category_by_name,
+    create_category, update_category, delete_category, assign_streams_to_category,
 )
 from backend.database import get_db, init_db
 from backend.hls_manager import hls_manager, HLS_BASE
 from backend.schemas import (
     LoginRequest, StreamCreate, StreamOut, StreamUpdate,
     TokenResponse, UserCreate, UserOut, UserUpdate,
+    CategoryCreate, CategoryOut, CategoryUpdate,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +40,7 @@ logger = logging.getLogger(__name__)
 audit = logging.getLogger("aistra.audit")   # separate audit trail
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+LOGOS_BASE    = os.getenv("LOGOS_BASE", "/tmp/aistra_logos")
 
 
 # ── Simple in-memory rate limiter for login ───────────────────────────────────
@@ -61,6 +65,7 @@ def _check_rate_limit(ip: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    os.makedirs(LOGOS_BASE, exist_ok=True)
     await init_db()
     hls_manager.startup_cleanup()
     hls_manager.start_background_cleanup()
@@ -504,6 +509,151 @@ async def api_restore(
                request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
 
     return {"created": created, "updated": updated, "skipped": skipped}
+
+
+# ── Categories ────────────────────────────────────────────────────────────────
+
+@app.get("/api/categories", response_model=list[CategoryOut])
+async def api_list_categories(
+    db: AsyncSession = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    return await list_categories(db)
+
+
+@app.post("/api/categories", response_model=CategoryOut, status_code=201)
+async def api_create_category(
+    body: CategoryCreate,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_operator),
+):
+    existing = await get_category_by_name(db, body.name)
+    if existing:
+        raise HTTPException(status_code=400, detail="Categoria já existe com esse nome")
+    return await create_category(db, body)
+
+
+@app.put("/api/categories/{cat_id}", response_model=CategoryOut)
+async def api_update_category(
+    cat_id: int,
+    body: CategoryUpdate,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_operator),
+):
+    # If renaming, update streams too
+    cat = await get_category(db, cat_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    old_name = cat.name
+    updated = await update_category(db, cat_id, body)
+    if body.name and body.name != old_name:
+        # Rename category in all streams
+        from sqlalchemy import update as sa_update
+        from backend.models import Stream as StreamModel
+        await db.execute(
+            sa_update(StreamModel).where(StreamModel.category == old_name).values(category=body.name)
+        )
+        await db.commit()
+        await db.refresh(updated)
+    return updated
+
+
+@app.delete("/api/categories/{cat_id}", status_code=204)
+async def api_delete_category(
+    cat_id: int,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_operator),
+):
+    if not await delete_category(db, cat_id):
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
+
+
+@app.post("/api/categories/{cat_id}/logo")
+async def api_upload_logo(
+    cat_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_operator),
+):
+    """Upload logo image for a category (PNG/JPG/SVG/WEBP, max 2MB)."""
+    cat = await get_category(db, cat_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
+
+    # Validate type + size
+    allowed = {"image/png", "image/jpeg", "image/webp", "image/svg+xml", "image/gif"}
+    content_type = file.content_type or ""
+    if content_type not in allowed:
+        raise HTTPException(status_code=400, detail="Tipo inválido. Use PNG, JPG, WEBP ou SVG.")
+
+    data = await file.read()
+    if len(data) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Logo muito grande (máx 2MB)")
+
+    ext = content_type.split("/")[-1].replace("svg+xml", "svg")
+    filename = f"cat_{cat_id}.{ext}"
+    # Remove old logo if different extension
+    for old in [f for f in os.listdir(LOGOS_BASE) if f.startswith(f"cat_{cat_id}.")]:
+        try: os.unlink(os.path.join(LOGOS_BASE, old))
+        except: pass
+
+    path = os.path.join(LOGOS_BASE, filename)
+    with open(path, "wb") as f:
+        f.write(data)
+
+    cat.logo_path = filename
+    await db.commit()
+    return {"logo_path": filename}
+
+
+@app.delete("/api/categories/{cat_id}/logo", status_code=204)
+async def api_delete_logo(
+    cat_id: int,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_operator),
+):
+    cat = await get_category(db, cat_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    if cat.logo_path:
+        try: os.unlink(os.path.join(LOGOS_BASE, cat.logo_path))
+        except: pass
+        cat.logo_path = None
+        await db.commit()
+
+
+@app.get("/api/categories/{cat_id}/logo")
+async def api_get_logo(
+    cat_id: int,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    cat = await get_category(db, cat_id)
+    if not cat or not cat.logo_path:
+        raise HTTPException(status_code=404, detail="Logo não encontrado")
+    path = os.path.join(LOGOS_BASE, cat.logo_path)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+    media = "image/svg+xml" if cat.logo_path.endswith(".svg") else "image/jpeg"
+    return FileResponse(path, media_type=media, headers={"Cache-Control": "max-age=3600"})
+
+
+@app.post("/api/categories/{cat_id}/streams")
+async def api_assign_streams(
+    cat_id: int,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_operator),
+):
+    """Assign list of stream IDs to this category (replaces current assignment)."""
+    cat = await get_category(db, cat_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    stream_ids = body.get("stream_ids", [])
+    if not isinstance(stream_ids, list):
+        raise HTTPException(status_code=400, detail="stream_ids deve ser uma lista")
+    count = await assign_streams_to_category(db, cat.name, stream_ids)
+    return {"assigned": count, "category": cat.name}
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { FiGrid, FiVideo, FiUsers, FiLogOut, FiRadio, FiSettings, FiChevronRight } from 'react-icons/fi'
+import { FiGrid, FiVideo, FiUsers, FiLogOut, FiRadio, FiSettings, FiChevronRight, FiTag } from 'react-icons/fi'
 
 export default function Layout() {
   const nav      = useNavigate()
@@ -8,7 +8,7 @@ export default function Layout() {
   const user     = JSON.parse(localStorage.getItem('user') || '{}')
   const [open, setOpen]           = useState(false)
   const [configOpen, setConfigOpen] = useState(
-    () => ['/settings', '/users'].some(p => location.pathname.startsWith(p))
+    () => ['/settings', '/users', '/categories'].some(p => location.pathname.startsWith(p))
   )
 
   // Close sidebar on navigation (mobile)
@@ -16,7 +16,7 @@ export default function Layout() {
 
   // Auto-expand config sub-menu when navigating to a child route
   useEffect(() => {
-    if (['/settings', '/users'].some(p => location.pathname.startsWith(p))) {
+    if (['/settings', '/users', '/categories'].some(p => location.pathname.startsWith(p))) {
       setConfigOpen(true)
     }
   }, [location.pathname])
@@ -66,6 +66,9 @@ export default function Layout() {
               <div className={`nav-sub${configOpen ? ' open' : ''}`}>
                 <NavLink to="/settings" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
                   <FiSettings size={13} /> Geral
+                </NavLink>
+                <NavLink to="/categories" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+                  <FiTag size={13} /> Categorias
                 </NavLink>
                 <NavLink to="/users" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
                   <FiUsers size={13} /> Usuários

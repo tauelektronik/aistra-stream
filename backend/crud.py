@@ -5,9 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
 from typing import List, Optional
 
-from backend.models import User, Stream
+from backend.models import User, Stream, Category
 from backend.auth import hash_password
-from backend.schemas import UserCreate, UserUpdate, StreamCreate, StreamUpdate
+from backend.schemas import UserCreate, UserUpdate, StreamCreate, StreamUpdate, CategoryCreate, CategoryUpdate
 
 
 # ── Users ────────────────────────────────────────────────────────────────────
@@ -91,3 +91,63 @@ async def delete_stream(db: AsyncSession, stream_id: str) -> bool:
     await db.delete(stream)
     await db.commit()
     return True
+
+
+# ── Categories ────────────────────────────────────────────────────────────────
+
+async def list_categories(db: AsyncSession) -> List[Category]:
+    result = await db.execute(select(Category).order_by(Category.name))
+    return list(result.scalars().all())
+
+async def get_category(db: AsyncSession, cat_id: int) -> Optional[Category]:
+    result = await db.execute(select(Category).where(Category.id == cat_id))
+    return result.scalar_one_or_none()
+
+async def get_category_by_name(db: AsyncSession, name: str) -> Optional[Category]:
+    result = await db.execute(select(Category).where(Category.name == name))
+    return result.scalar_one_or_none()
+
+async def create_category(db: AsyncSession, data: CategoryCreate) -> Category:
+    cat = Category(name=data.name)
+    db.add(cat)
+    await db.commit()
+    await db.refresh(cat)
+    return cat
+
+async def update_category(db: AsyncSession, cat_id: int, data: CategoryUpdate) -> Optional[Category]:
+    cat = await get_category(db, cat_id)
+    if not cat:
+        return None
+    if data.name is not None:
+        cat.name = data.name
+    await db.commit()
+    await db.refresh(cat)
+    return cat
+
+async def delete_category(db: AsyncSession, cat_id: int) -> bool:
+    cat = await get_category(db, cat_id)
+    if not cat:
+        return False
+    # Unassign streams that belong to this category
+    result = await db.execute(select(Stream).where(Stream.category == cat.name))
+    for stream in result.scalars().all():
+        stream.category = None
+    await db.delete(cat)
+    await db.commit()
+    return True
+
+async def assign_streams_to_category(db: AsyncSession, cat_name: str, stream_ids: List[str]) -> int:
+    """Set category=cat_name for given stream_ids, clear for others in that category."""
+    # Clear existing assignments for this category
+    result = await db.execute(select(Stream).where(Stream.category == cat_name))
+    for s in result.scalars().all():
+        if s.id not in stream_ids:
+            s.category = None
+    # Assign new ones
+    for sid in stream_ids:
+        result2 = await db.execute(select(Stream).where(Stream.id == sid))
+        s = result2.scalar_one_or_none()
+        if s:
+            s.category = cat_name
+    await db.commit()
+    return len(stream_ids)

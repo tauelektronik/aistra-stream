@@ -484,16 +484,32 @@ function StreamModal({ stream, onSave, onClose }: {
 // ─── Recordings modal ─────────────────────────────────────────────────────────
 
 function RecordingsModal({ onClose }: { onClose: () => void }) {
-  const [recs, setRecs]   = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const [recs, setRecs]         = useState<any[]>([])
+  const [loading, setLoading]   = useState(true)
+  const [downloading, setDl]    = useState<string | null>(null)
 
   useEffect(() => {
     api.get('/api/recordings').then(r => setRecs(r.data)).finally(() => setLoading(false))
   }, [])
 
   function fmt(bytes: number) {
-    if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB'
-    return (bytes/(1024*1024)).toFixed(1) + ' MB'
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+  }
+
+  async function download(filename: string) {
+    setDl(filename)
+    try {
+      const res = await fetch(`/api/recordings/${filename}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+      })
+      if (!res.ok) { alert('Erro ao baixar: ' + res.status); return }
+      const blob = await res.blob()
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
+      a.href = url; a.download = filename; a.click()
+      URL.revokeObjectURL(url)
+    } finally { setDl(null) }
   }
 
   return (
@@ -527,9 +543,14 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
                       {new Date(r.created_at).toLocaleString('pt-BR')}
                     </td>
                     <td style={{ padding:'8px 8px', textAlign:'right' }}>
-                      <a href={`/api/recordings/${r.filename}`} download className="btn btn-ghost btn-sm">
-                        <FiDownload size={12} />
-                      </a>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        title="Baixar"
+                        disabled={downloading === r.filename}
+                        onClick={() => download(r.filename)}
+                      >
+                        {downloading === r.filename ? '…' : <FiDownload size={12} />}
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -568,6 +589,34 @@ export default function Streams() {
   useEffect(() => { load() }, [load])
   useEffect(() => { const t = setInterval(load, 10000); return () => clearInterval(t) }, [load])
 
+  // When streams list changes, load thumbnails + recording status for running streams immediately
+  useEffect(() => {
+    if (streams.length === 0) return
+    const token = localStorage.getItem('token') ?? ''
+
+    // Load thumbnails immediately for running streams (not already cached)
+    const running = streams.filter(s => s.status === 'running')
+    for (const s of running) {
+      if (thumbnails[s.id]) continue   // already cached
+      fetch(`/api/streams/${s.id}/thumbnail?t=${Date.now()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(async r => {
+        if (r.ok) {
+          const blob = await r.blob()
+          setThumbnails(prev => ({ ...prev, [s.id]: URL.createObjectURL(blob) }))
+        }
+      }).catch(() => {})
+    }
+
+    // Restore recording status
+    for (const s of running) {
+      api.get(`/api/streams/${s.id}/record/status`).then(r => {
+        if (r.data?.recording) setRecording(prev => ({ ...prev, [s.id]: true }))
+      }).catch(() => {})
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streams])
+
   // Poll stats for running streams every 5s
   useEffect(() => {
     const t = setInterval(async () => {
@@ -589,13 +638,12 @@ export default function Streams() {
   // Refresh thumbnails for running streams every 15s
   useEffect(() => {
     const t = setInterval(async () => {
+      const token   = localStorage.getItem('token') ?? ''
       const running = streams.filter(s => s.status === 'running')
       for (const s of running) {
         try {
-          const url = `/api/streams/${s.id}/thumbnail?t=${Date.now()}`
-          // Check if thumbnail exists
-          const r = await fetch(url, {
-            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+          const r = await fetch(`/api/streams/${s.id}/thumbnail?t=${Date.now()}`, {
+            headers: { Authorization: `Bearer ${token}` },
           })
           if (r.ok) {
             const blob = await r.blob()

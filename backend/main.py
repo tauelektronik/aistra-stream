@@ -656,6 +656,66 @@ async def api_assign_streams(
     return {"assigned": count, "category": cat.name}
 
 
+# ── Server stats ──────────────────────────────────────────────────────────────
+
+_net_prev: dict = {}   # cache for network delta calculation
+
+@app.get("/api/server/stats")
+async def server_stats(current_user=Depends(get_current_user)):
+    import psutil, subprocess, asyncio as _aio
+
+    # CPU (non-blocking: use cached 1-interval reading)
+    cpu_pct = psutil.cpu_percent(interval=None)
+
+    # RAM
+    mem  = psutil.virtual_memory()
+
+    # Disk (root partition)
+    disk = psutil.disk_usage("/")
+
+    # Network — delta between two 0.5s samples → bytes/sec
+    net1 = psutil.net_io_counters()
+    await _aio.sleep(0.5)
+    net2 = psutil.net_io_counters()
+    net_up_bps   = max(0, (net2.bytes_sent - net1.bytes_sent) * 2)
+    net_down_bps = max(0, (net2.bytes_recv - net1.bytes_recv) * 2)
+
+    # GPU via nvidia-smi (optional)
+    gpu = None
+    try:
+        r = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if r.returncode == 0:
+            parts = [p.strip() for p in r.stdout.strip().split(",")]
+            if len(parts) >= 5:
+                gpu = {
+                    "name":             parts[0],
+                    "utilization_pct":  int(parts[1]),
+                    "memory_used_mb":   int(parts[2]),
+                    "memory_total_mb":  int(parts[3]),
+                    "temperature_c":    int(parts[4]),
+                }
+    except Exception:
+        pass
+
+    return {
+        "cpu_pct":        round(cpu_pct, 1),
+        "mem_used_gb":    round(mem.used   / 1024 ** 3, 1),
+        "mem_total_gb":   round(mem.total  / 1024 ** 3, 1),
+        "mem_pct":        round(mem.percent, 1),
+        "disk_used_gb":   round(disk.used  / 1024 ** 3, 1),
+        "disk_total_gb":  round(disk.total / 1024 ** 3, 1),
+        "disk_pct":       round(disk.percent, 1),
+        "net_up_mbps":    round(net_up_bps   / 1024 ** 2, 2),
+        "net_down_mbps":  round(net_down_bps / 1024 ** 2, 2),
+        "gpu":            gpu,
+    }
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/health", include_in_schema=False)

@@ -34,7 +34,7 @@ const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
   stream_type:'live', video_codec:'libx264', video_preset:'ultrafast',
   video_crf:26, video_maxrate:'', video_resolution:'original',
   audio_codec:'aac', audio_bitrate:'128k',
-  hls_time:4, hls_list_size:30, buffer_seconds:20,
+  hls_time:4, hls_list_size:8, buffer_seconds:20,
   output_rtmp:'', output_udp:'',
   proxy:'', user_agent:'', backup_urls:'',
   output_qualities:'', audio_track:0,
@@ -439,8 +439,8 @@ function StreamModal({ stream, onSave, onClose }: {
             <Row label={`Duração do segmento HLS: ${form.hls_time}s`} hint="Menor = menor latência, maior = mais estável">
               <Num form={form} set={set} k="hls_time" min={1} max={10} />
             </Row>
-            <Row label={`Segmentos na playlist: ${form.hls_list_size}`} hint="Janela disponível para o player">
-              <Num form={form} set={set} k="hls_list_size" min={5} max={120} />
+            <Row label={`Segmentos na playlist: ${form.hls_list_size}`} hint="Quantos segmentos ficam no disco ao mesmo tempo. 8 = 32s (ideal para live). Mais = mais armazenamento usado.">
+              <Num form={form} set={set} k="hls_list_size" min={3} max={30} />
             </Row>
             <Row label={`Buffer do player: ${form.buffer_seconds}s`} hint="Atraso em relação ao vivo — mais = mais suave">
               <Num form={form} set={set} k="buffer_seconds" min={5} max={120} step={5} />

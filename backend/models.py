@@ -1,7 +1,11 @@
 """
 SQLAlchemy ORM models for aistra-stream.
 """
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 from sqlalchemy import (
     Integer, String, Boolean, Text, DateTime, Enum as SAEnum, ForeignKey
 )
@@ -43,7 +47,7 @@ class Category(Base):
     id         : Mapped[int]      = mapped_column(Integer, primary_key=True, autoincrement=True)
     name       : Mapped[str]      = mapped_column(String(100), unique=True, nullable=False)
     logo_path  : Mapped[str|None] = mapped_column(String(500), nullable=True)   # filename in LOGOS_BASE dir
-    created_at : Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at : Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 class User(Base):
@@ -55,7 +59,7 @@ class User(Base):
     email         : Mapped[str|None] = mapped_column(String(100), nullable=True)
     role          : Mapped[str]      = mapped_column(SAEnum(UserRole), default=UserRole.viewer, nullable=False)
     active        : Mapped[bool]     = mapped_column(Boolean, default=True, nullable=False)
-    created_at    : Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at    : Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 class Stream(Base):
@@ -114,5 +118,5 @@ class Stream(Base):
 
     # Metadata
     enabled       : Mapped[bool]     = mapped_column(Boolean, default=True)
-    created_at    : Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at    : Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at    : Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at    : Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)

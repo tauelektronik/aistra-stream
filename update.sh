@@ -11,22 +11,21 @@ set -e
 PROJECT_DIR="/opt/aistra-stream"
 PORT=${PORT:-8001}
 
-# Token GitHub read-only — passe via env var (nunca hardcode):
-#   export GH_TOKEN=ghp_xxxx && sudo -E bash update.sh
-GH_TOKEN="${GH_TOKEN:-}"
-if [ -z "$GH_TOKEN" ]; then
-    err "GH_TOKEN não definido. Configure antes de executar:
-  export GH_TOKEN=ghp_xxxx
-  sudo -E bash update.sh"
-fi
-GIT_REPO="https://${GH_TOKEN}@github.com/tauelektronik/aistra-stream.git"
-
+# ── Helper functions (must be defined FIRST) ──────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}[OK]${NC} $*"; }
 info() { echo -e "${CYAN}[..] $*${NC}"; }
 warn() { echo -e "${YELLOW}[AV] $*${NC}"; }
 err()  { echo -e "${RED}[ERRO] $*${NC}"; exit 1; }
+
+# ── Token GitHub read-only — passe via env var (nunca hardcode):
+#   export GH_TOKEN=ghp_xxxx && sudo -E bash update.sh
+GH_TOKEN="${GH_TOKEN:-}"
+[ -n "$GH_TOKEN" ] || err "GH_TOKEN não definido. Configure antes de executar:
+  export GH_TOKEN=ghp_xxxx
+  sudo -E bash update.sh"
+GIT_REPO="https://${GH_TOKEN}@github.com/tauelektronik/aistra-stream.git"
 
 echo -e "${BOLD}${CYAN}"
 echo "  ╔═══════════════════════════════════╗"
@@ -83,7 +82,7 @@ ok "Dependências Python atualizadas"
 # ── 5. Rebuild frontend ───────────────────────────────────────
 info "Buildando frontend React..."
 cd frontend
-npm install --silent
+npm install --loglevel=warn
 npm run build
 cd ..
 ok "Frontend atualizado em frontend/dist/"

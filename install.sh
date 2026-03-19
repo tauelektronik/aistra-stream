@@ -15,17 +15,23 @@ set -e
 
 PROJECT_DIR="/opt/aistra-stream"
 
+# ── Helper functions (must be defined FIRST) ──────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+ok()   { echo -e "${GREEN}[OK]${NC} $*"; }
+info() { echo -e "${CYAN}[..] $*${NC}"; }
+warn() { echo -e "${YELLOW}[AV] $*${NC}"; }
+err()  { echo -e "${RED}[ERRO] $*${NC}"; exit 1; }
+
 # ── Token GitHub (read-only, repositório aistra-stream) ───────
 # Fine-grained PAT com permissão "Contents: Read-only" no repo.
 # Passe via variável de ambiente para não expor em disco:
 #   export GH_TOKEN=ghp_xxxx && sudo -E bash install.sh
 # Ou inline: GH_TOKEN=ghp_xxxx sudo -E bash install.sh
 GH_TOKEN="${GH_TOKEN:-}"
-if [ -z "$GH_TOKEN" ]; then
-    err "GH_TOKEN não definido. Configure antes de executar:
+[ -n "$GH_TOKEN" ] || err "GH_TOKEN não definido. Configure antes de executar:
   export GH_TOKEN=ghp_xxxx
   sudo -E bash install.sh"
-fi
 GIT_REPO="https://${GH_TOKEN}@github.com/tauelektronik/aistra-stream.git"
 PORT=8001
 DB_NAME="aistra_stream"
@@ -33,14 +39,6 @@ DB_USER="aistra"
 # Gera senha aleatória segura para o banco (32 chars hex)
 DB_PASS=$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || \
           cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 32)
-
-# ── Cores ─────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
-ok()   { echo -e "${GREEN}[OK]${NC} $*"; }
-info() { echo -e "${CYAN}[..] $*${NC}"; }
-warn() { echo -e "${YELLOW}[AV] $*${NC}"; }
-err()  { echo -e "${RED}[ERRO] $*${NC}"; exit 1; }
 
 echo -e "${BOLD}${CYAN}"
 echo "  ╔═══════════════════════════════════╗"
@@ -363,7 +361,7 @@ create_env() {
 build_frontend() {
     info "Instalando dependências e buildando frontend React..."
     cd "$PROJECT_DIR/frontend"
-    npm install --silent
+    npm install --loglevel=warn
     npm run build
     ok "Frontend buildado em frontend/dist/"
 }
@@ -466,7 +464,7 @@ print_summary() {
     echo "    Logs em tempo real: journalctl -u aistra-stream -f"
     echo "    Reiniciar:          systemctl restart aistra-stream"
     echo "    Parar:              systemctl stop aistra-stream"
-    echo "    Atualizar:          cd ${PROJECT_DIR} && git pull && ./venv/bin/pip install -q -r backend/requirements.txt && (cd frontend && npm install --silent && npm run build) && systemctl restart aistra-stream"
+    echo "    Atualizar:          cd ${PROJECT_DIR} && git pull && ./venv/bin/pip install -q -r backend/requirements.txt && (cd frontend && npm install --loglevel=warn && npm run build) && systemctl restart aistra-stream"
     echo ""
     echo -e "  ${BOLD}Binários detectados:${NC}"
     echo "    ffmpeg:      $(command -v ffmpeg 2>/dev/null || echo 'não encontrado')"

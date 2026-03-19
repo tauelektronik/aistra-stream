@@ -10,7 +10,15 @@ DB_URL = os.getenv(
     "mysql+aiomysql://aistra:aistra123@localhost:3306/aistra_stream"
 )
 
-engine = create_async_engine(DB_URL, echo=False, pool_pre_ping=True, pool_size=10)
+engine = create_async_engine(
+    DB_URL,
+    echo=False,
+    pool_pre_ping=True,   # re-validates idle connections before use
+    pool_size=10,
+    pool_recycle=3600,    # recycle connections every 1h (MariaDB drops after 8h inactivity)
+    pool_timeout=30,      # raise after 30s if no connection available
+    max_overflow=5,       # allow up to 15 total connections under peak load
+)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 

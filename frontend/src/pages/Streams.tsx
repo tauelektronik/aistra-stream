@@ -119,7 +119,6 @@ function StreamPlayer({ streamId, bufferSeconds, onClose }: {
 function LogModal({ streamId, onClose }: { streamId: string; onClose: () => void }) {
   const [lines, setLines]    = useState<string[]>([])
   const bottomRef            = useRef<HTMLDivElement>(null)
-  const esRef                = useRef<EventSource | null>(null)
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -165,7 +164,7 @@ function LogModal({ streamId, onClose }: { streamId: string; onClose: () => void
     }
 
     connect()
-    return () => { closed = true; ctrl.abort(); activeReader?.cancel(); esRef.current?.close() }
+    return () => { closed = true; ctrl.abort(); activeReader?.cancel() }
   }, [streamId])
 
   useEffect(() => {
@@ -674,6 +673,7 @@ export default function Streams() {
   useEffect(() => {
     if (streams.length === 0) return
     const token = localStorage.getItem('token') ?? ''
+    const ctrl  = new AbortController()
 
     // Load thumbnails immediately for running streams (not already cached)
     const running = streams.filter(s => s.status === 'running')
@@ -681,8 +681,9 @@ export default function Streams() {
       if (thumbnails[s.id]) continue   // already cached
       fetch(`/api/streams/${s.id}/thumbnail?t=${Date.now()}`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: ctrl.signal,
       }).then(async r => {
-        if (r.ok) {
+        if (r.ok && !ctrl.signal.aborted) {
           const blob = await r.blob()
           setThumbnails(prev => {
             if (prev[s.id]) URL.revokeObjectURL(prev[s.id])
@@ -694,10 +695,12 @@ export default function Streams() {
 
     // Restore recording status
     for (const s of running) {
-      api.get(`/api/streams/${s.id}/record/status`).then(r => {
+      api.get(`/api/streams/${s.id}/record/status`, { signal: ctrl.signal }).then(r => {
         if (r.data?.recording) setRecording(prev => ({ ...prev, [s.id]: true }))
       }).catch(() => {})
     }
+
+    return () => ctrl.abort()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streams])
 
@@ -723,15 +726,19 @@ export default function Streams() {
 
   // Refresh thumbnails for running streams every 15s
   useEffect(() => {
+    let ctrl: AbortController | null = null
     const t = setInterval(async () => {
+      ctrl?.abort()
+      ctrl = new AbortController()
       const token   = localStorage.getItem('token') ?? ''
       const running = streams.filter(s => s.status === 'running')
       for (const s of running) {
         try {
           const r = await fetch(`/api/streams/${s.id}/thumbnail?t=${Date.now()}`, {
             headers: { Authorization: `Bearer ${token}` },
+            signal: ctrl.signal,
           })
-          if (r.ok) {
+          if (r.ok && !ctrl.signal.aborted) {
             const blob = await r.blob()
             setThumbnails(prev => {
               if (prev[s.id]) URL.revokeObjectURL(prev[s.id])
@@ -741,7 +748,7 @@ export default function Streams() {
         } catch { /* ignore */ }
       }
     }, 15000)
-    return () => clearInterval(t)
+    return () => { clearInterval(t); ctrl?.abort() }
   }, [streams])
 
   async function stopStream(id: string) {

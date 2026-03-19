@@ -456,7 +456,7 @@ class HLSManager:
     def touch(self, stream_id: str):
         sess = self._sessions.get(stream_id)
         if sess:
-            sess["last_touch"] = time.monotonic()
+            sess["last_touch"] = asyncio.get_running_loop().time()
 
     async def get_stats(self, stream_id: str) -> dict:
         """Return latest ffmpeg stats for a stream."""

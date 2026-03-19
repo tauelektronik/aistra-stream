@@ -27,7 +27,26 @@ async def get_db():
 
 
 async def init_db():
-    """Create all tables on startup."""
-    from backend.models import User, Stream  # noqa: F401
+    """Create all tables on startup (no-op if already exist)."""
+    from backend.models import User, Stream, Category  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await run_migrations()
+
+
+async def run_migrations():
+    """Apply incremental schema changes to existing tables.
+    Each ALTER is wrapped in try/except so re-runs are safe.
+    Add a new block here whenever a column is added to a model.
+    """
+    import sqlalchemy as sa
+    migrations = [
+        # v1.1 — channel number per stream
+        "ALTER TABLE streams ADD COLUMN channel_num INT NULL UNIQUE",
+    ]
+    async with engine.begin() as conn:
+        for sql in migrations:
+            try:
+                await conn.execute(sa.text(sql))
+            except Exception:
+                pass  # column already exists — safe to ignore

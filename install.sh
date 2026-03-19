@@ -2,14 +2,24 @@
 # ═══════════════════════════════════════════════════════════════
 #  aistra-stream — Universal Linux Install Script
 #  Suporta: Ubuntu/Debian · CentOS/RHEL/AlmaLinux/Rocky · Fedora · Arch
+#
+#  Instalação rápida (uma linha):
+#    bash <(curl -fsSL https://raw.githubusercontent.com/tauelektronik/aistra-stream/main/install.sh)
+#
+#  Ou clone + instale:
+#    git clone https://github.com/tauelektronik/aistra-stream.git
+#    sudo bash aistra-stream/install.sh
 # ═══════════════════════════════════════════════════════════════
 set -e
 
 PROJECT_DIR="/opt/aistra-stream"
+GIT_REPO="https://github.com/tauelektronik/aistra-stream.git"
 PORT=8001
 DB_NAME="aistra_stream"
 DB_USER="aistra"
-DB_PASS="aistra123"
+# Gera senha aleatória segura para o banco (32 chars hex)
+DB_PASS=$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || \
+          cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 32)
 
 # ── Cores ─────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -248,17 +258,36 @@ install_ytdlp() {
     ok "yt-dlp $(yt-dlp --version 2>/dev/null)"
 }
 
-# ── Copiar projeto ────────────────────────────────────────────
+# ── Copiar / clonar projeto ───────────────────────────────────
 deploy_project() {
-    info "Copiando projeto para ${PROJECT_DIR}..."
-    mkdir -p "$PROJECT_DIR"
-    # Se estiver rodando de dentro do clone, não copiar pra cima
     local SRC; SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    if [ "$SRC" != "$PROJECT_DIR" ]; then
+
+    if [ "$SRC" = "$PROJECT_DIR" ]; then
+        # Já está no destino (clone direto em /opt/aistra-stream)
+        ok "Projeto já em ${PROJECT_DIR}"
+    elif [ -d "$PROJECT_DIR/.git" ]; then
+        # Instalação existente — atualiza via git pull
+        info "Atualizando instalação existente..."
+        cd "$PROJECT_DIR"
+        git pull --ff-only || { warn "git pull falhou — mantendo versão atual"; }
+        ok "Projeto atualizado em ${PROJECT_DIR}"
+    elif [ -d "$SRC/.git" ]; then
+        # Clone local — copia para destino
+        info "Copiando projeto para ${PROJECT_DIR}..."
+        mkdir -p "$PROJECT_DIR"
         cp -r "$SRC/." "$PROJECT_DIR/"
+        ok "Projeto copiado para ${PROJECT_DIR}"
+    else
+        # Sem git disponível — clona do GitHub
+        info "Clonando repositório de ${GIT_REPO}..."
+        command -v git &>/dev/null || { apt-get install -y git 2>/dev/null || $PKG_MGR install -y git; }
+        if [ -d "$PROJECT_DIR" ]; then
+            rm -rf "$PROJECT_DIR"
+        fi
+        git clone --depth 1 "$GIT_REPO" "$PROJECT_DIR"
+        ok "Repositório clonado em ${PROJECT_DIR}"
     fi
     cd "$PROJECT_DIR"
-    ok "Projeto em ${PROJECT_DIR}"
 }
 
 # ── Python venv + deps ────────────────────────────────────────
@@ -280,7 +309,6 @@ create_env() {
         cp .env.example .env
         local SECRET
         SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-        # Replace the placeholder (whatever it is) on the SECRET_KEY line
         sed -i "s|^SECRET_KEY=.*|SECRET_KEY=${SECRET}|" .env
         sed -i "s|^DATABASE_URL=.*|DATABASE_URL=mysql+aiomysql://${DB_USER}:${DB_PASS}@localhost:3306/${DB_NAME}|" .env
 
@@ -288,13 +316,28 @@ create_env() {
         FFMPEG_PATH=$(command -v ffmpeg || echo "/usr/bin/ffmpeg")
         N_M3U8DL_PATH=$(command -v n_m3u8dl || echo "/usr/local/bin/n_m3u8dl")
         MP4DECRYPT_PATH=$(command -v mp4decrypt || echo "/usr/local/bin/mp4decrypt")
+        YTDLP_PATH=$(command -v yt-dlp || echo "/usr/local/bin/yt-dlp")
         sed -i "s|^N_M3U8DL=.*|N_M3U8DL=${N_M3U8DL_PATH}|" .env
         sed -i "s|^MP4DECRYPT=.*|MP4DECRYPT=${MP4DECRYPT_PATH}|" .env
         sed -i "s|^FFMPEG=.*|FFMPEG=${FFMPEG_PATH}|" .env
-        ok "Arquivo .env criado"
+        sed -i "s|^YTDLP=.*|YTDLP=${YTDLP_PATH}|" .env
+        # Diretórios persistentes (fora do /tmp)
+        sed -i "s|^RECORDINGS_BASE=.*|RECORDINGS_BASE=${PROJECT_DIR}/recordings|" .env
+        sed -i "s|^THUMBNAILS_BASE=.*|THUMBNAILS_BASE=/tmp/aistra_thumbnails|" .env
+        sed -i "s|^LOGOS_BASE=.*|LOGOS_BASE=${PROJECT_DIR}/logos|" .env
+        ok "Arquivo .env criado com credenciais seguras"
     else
         warn ".env já existe — mantendo configuração atual"
+        # Garantir que novas variáveis existam no .env atual
+        grep -q "^RECORDINGS_BASE=" .env || echo "RECORDINGS_BASE=${PROJECT_DIR}/recordings" >> .env
+        grep -q "^THUMBNAILS_BASE=" .env || echo "THUMBNAILS_BASE=/tmp/aistra_thumbnails"    >> .env
+        grep -q "^LOGOS_BASE="      .env || echo "LOGOS_BASE=${PROJECT_DIR}/logos"            >> .env
+        ok ".env existente — novas variáveis adicionadas se ausentes"
     fi
+
+    # Criar diretórios persistentes
+    mkdir -p "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos"
+    chmod 750 "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos"
 }
 
 # ── Frontend build ─────────────────────────────────────────────
@@ -342,6 +385,38 @@ EOF
     fi
 }
 
+# ── Health check ──────────────────────────────────────────────
+health_check() {
+    info "Verificando serviço..."
+    local tries=0
+    while [ $tries -lt 15 ]; do
+        local http_code
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/health" 2>/dev/null || echo "000")
+        if [ "$http_code" = "200" ]; then
+            ok "Health check OK (HTTP 200)"
+            return
+        fi
+        sleep 2; tries=$((tries+1))
+    done
+    warn "Health check não respondeu em 30s — verifique: journalctl -u aistra-stream -n 30"
+}
+
+# ── Logrotate ─────────────────────────────────────────────────
+setup_logrotate() {
+    cat > /etc/logrotate.d/aistra-stream <<'EOF'
+/var/log/aistra-stream.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    copytruncate
+}
+EOF
+    ok "Logrotate configurado para /var/log/aistra-stream.log"
+}
+
 # ── Firewall (se ativo) ───────────────────────────────────────
 open_firewall() {
     if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
@@ -372,7 +447,7 @@ print_summary() {
     echo "    Logs em tempo real: journalctl -u aistra-stream -f"
     echo "    Reiniciar:          systemctl restart aistra-stream"
     echo "    Parar:              systemctl stop aistra-stream"
-    echo "    Atualizar:          cd ${PROJECT_DIR} && git pull && systemctl restart aistra-stream"
+    echo "    Atualizar:          cd ${PROJECT_DIR} && git pull && ./venv/bin/pip install -q -r backend/requirements.txt && (cd frontend && npm install --silent && npm run build) && systemctl restart aistra-stream"
     echo ""
     echo -e "  ${BOLD}Binários detectados:${NC}"
     echo "    ffmpeg:      $(command -v ffmpeg 2>/dev/null || echo 'não encontrado')"
@@ -398,5 +473,7 @@ setup_python
 create_env
 build_frontend
 install_service
+health_check
+setup_logrotate
 open_firewall
 print_summary

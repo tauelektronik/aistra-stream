@@ -863,7 +863,7 @@ class HLSManager:
             "-f", "hls",
             "-hls_time",             str(stream.hls_time),
             "-hls_list_size",        str(stream.hls_list_size),
-            "-hls_flags",            "delete_segments",
+            "-hls_flags",            "delete_segments+omit_endlist",
             "-hls_segment_filename", os.path.join(hls_dir, "seg%05d.ts"),
             playlist,
         ]
@@ -967,7 +967,7 @@ class HLSManager:
         else:
             hls_out = (
                 f"[f=hls:hls_time={stream.hls_time}:hls_list_size={stream.hls_list_size}"
-                f":hls_flags=delete_segments"
+                f":hls_flags=delete_segments+omit_endlist"
                 f":hls_segment_filename={os.path.join(hls_dir, 'seg%05d.ts')}]{playlist}"
             )
             extra_outputs = []
@@ -985,7 +985,7 @@ class HLSManager:
                     "-f",                    "hls",
                     "-hls_time",             str(stream.hls_time),
                     "-hls_list_size",        str(stream.hls_list_size),
-                    "-hls_flags",            "delete_segments",
+                    "-hls_flags",            "delete_segments+omit_endlist",
                     "-hls_segment_filename", os.path.join(hls_dir, "seg%05d.ts"),
                     playlist,
                 ]

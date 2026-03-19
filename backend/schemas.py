@@ -172,8 +172,8 @@ class StreamBase(BaseModel):
     video_resolution: str = "original"
     audio_codec:      str = "aac"
     audio_bitrate:    str = "128k"
-    hls_time:         int = Field(4, ge=1, le=10)
-    hls_list_size:    int = Field(8, ge=3, le=30)   # 8×4s = 32s on disk — enough for live buffering
+    hls_time:         int = Field(15, ge=1, le=60)
+    hls_list_size:    int = Field(15, ge=3, le=60)  # 15×15s = 225s on disk — prevents buffer stall
     buffer_seconds:   int = Field(20, ge=5, le=120)
     output_rtmp:      Optional[str] = None
     output_udp:       Optional[str] = None

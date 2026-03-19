@@ -55,6 +55,10 @@ async def run_migrations():
     migrations = [
         # v1.1 — channel number per stream
         "ALTER TABLE streams ADD COLUMN channel_num INT NULL UNIQUE",
+        # v1.2 — bump hls_time/hls_list_size to new defaults (15s × 15 segments)
+        # Only updates streams still on the old defaults to avoid overriding custom values
+        "UPDATE streams SET hls_time=15 WHERE hls_time=4",
+        "UPDATE streams SET hls_list_size=15 WHERE hls_list_size=8",
     ]
     async with engine.begin() as conn:
         for sql in migrations:

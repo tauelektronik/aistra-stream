@@ -38,7 +38,7 @@ const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
   stream_type:'live', video_codec:'libx264', video_preset:'ultrafast',
   video_crf:26, video_maxrate:'', video_resolution:'original',
   audio_codec:'aac', audio_bitrate:'128k',
-  hls_time:4, hls_list_size:8, buffer_seconds:20,
+  hls_time:15, hls_list_size:15, buffer_seconds:20,
   output_rtmp:'', output_udp:'',
   proxy:'', user_agent:'', backup_urls:'',
   output_qualities:'', audio_track:0,
@@ -48,38 +48,44 @@ const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
 
 // ─── Player component ─────────────────────────────────────────────────────────
 
-function StreamPlayer({ streamId, bufferSeconds, onClose }: {
-  streamId: string; bufferSeconds: number; onClose: () => void
+function StreamPlayer({ streamId, bufferSeconds, hlsTime, hlsListSize, onClose }: {
+  streamId: string; bufferSeconds: number
+  hlsTime: number; hlsListSize: number; onClose: () => void
 }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const hlsRef   = useRef<Hls | null>(null)
-  const [status, setStatus] = useState('Iniciando stream… (pode levar até 20s)')
+  const [status, setStatus] = useState('Iniciando stream… (pode levar até 30s)')
 
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
-    const url       = getHlsUrl(streamId)
-    const seg       = 4
-    const syncCount = Math.max(2, Math.round(bufferSeconds / seg))
+    const url      = getHlsUrl(streamId)
+    const seg      = hlsTime || 15
+    const listSize = hlsListSize || 15
+    // Sync to 2 segments behind live edge; max latency = half the playlist window
+    const syncCount  = 2
+    const maxLatency = Math.max(syncCount + 2, Math.round(listSize / 2))
+    // Buffer enough for the full playlist window to prevent stall/loop
+    const bufMs = seg * listSize * 1000
 
     if (Hls.isSupported()) {
       const hls = new Hls({
         liveSyncDurationCount:       syncCount,
-        liveMaxLatencyDurationCount: syncCount * 3,
-        maxBufferLength:             Math.max(60, bufferSeconds * 2),
-        maxMaxBufferLength:          Math.max(120, bufferSeconds * 4),
-        backBufferLength:            0,
+        liveMaxLatencyDurationCount: maxLatency,
+        maxBufferLength:             seg * listSize,   // full window ahead
+        maxMaxBufferLength:          seg * listSize * 2,
+        backBufferLength:            0,                // discard played segments — prevents loop
         lowLatencyMode:              false,
         startFragPrefetch:           true,
         enableWorker:                true,
         abrEwmaFastLive:             3.0,
         abrEwmaSlowLive:             9.0,
         manifestLoadingTimeOut:      60000,
-        manifestLoadingMaxRetry:     5,
+        manifestLoadingMaxRetry:     8,
         manifestLoadingRetryDelay:   3000,
-        levelLoadingTimeOut:         30000,
-        levelLoadingMaxRetry:        4,
-        fragLoadingTimeOut:          30000,
+        levelLoadingTimeOut:         Math.max(30000, bufMs),
+        levelLoadingMaxRetry:        6,
+        fragLoadingTimeOut:          Math.max(30000, bufMs),
       })
       hlsRef.current = hls
       hls.on(Hls.Events.MANIFEST_PARSED, () => { setStatus(''); video.play().catch(() => {}) })
@@ -1096,6 +1102,8 @@ export default function Streams() {
         <StreamPlayer
           streamId={playing.id}
           bufferSeconds={playing.buffer_seconds}
+          hlsTime={playing.hls_time ?? 15}
+          hlsListSize={playing.hls_list_size ?? 15}
           onClose={() => { setPlaying(null); load() }}
         />
       )}

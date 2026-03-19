@@ -29,6 +29,7 @@ interface Stream {
 interface StreamStats {
   running: boolean; uptime_s: number
   fps: string; bitrate_kbps: number; frame: string; speed: string
+  drop_frames: number; dup_frames: number; total_size_mb: number
 }
 
 const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
@@ -755,13 +756,24 @@ export default function Streams() {
   function StatsLine({ id }: { id: string }) {
     const s = stats[id]
     if (!s || !s.running) return null
-    const kbps   = s.bitrate_kbps
-    const mbps   = kbps > 0 ? (kbps > 1000 ? `${(kbps/1000).toFixed(1)} Mbps` : `${kbps} kbps`) : null
-    const fps    = s.fps && s.fps !== '0' ? `${s.fps} fps` : null
-    const uptime = s.uptime_s > 0 ? `⏱ ${fmtUptime(s.uptime_s)}` : null
+    const kbps       = s.bitrate_kbps
+    const mbps       = kbps > 0 ? (kbps > 1000 ? `${(kbps/1000).toFixed(1)} Mbps` : `${kbps} kbps`) : null
+    const fps        = s.fps && s.fps !== '0' ? `${s.fps} fps` : null
+    const uptime     = s.uptime_s > 0 ? `⏱ ${fmtUptime(s.uptime_s)}` : null
+    const speed      = s.speed && s.speed !== '' ? s.speed : null
+    const totalSize  = s.total_size_mb > 0 ? `${s.total_size_mb >= 1024 ? (s.total_size_mb/1024).toFixed(1)+' GB' : s.total_size_mb+' MB'}` : null
+    const hasDrops   = s.drop_frames > 0
+
     return (
-      <div style={{ fontSize:10, color:'var(--success)', marginTop:2 }}>
-        {[uptime, mbps && `⚡ ${mbps}`, fps].filter(Boolean).join(' · ')}
+      <div style={{ marginTop:2, display:'flex', flexDirection:'column', gap:1 }}>
+        <div style={{ fontSize:10, color:'var(--success)' }}>
+          {[uptime, mbps && `⚡ ${mbps}`, fps, speed && `${speed}`, totalSize].filter(Boolean).join(' · ')}
+        </div>
+        {hasDrops && (
+          <div style={{ fontSize:10, color:'var(--warning)' }}>
+            ⚠️ {s.drop_frames} frames descartados
+          </div>
+        )}
       </div>
     )
   }
@@ -933,6 +945,14 @@ export default function Streams() {
                       <span style={{ fontSize:12, color:'var(--text2)' }}>
                         {s.video_codec === 'copy' ? 'copy' : `${s.video_codec} ${s.video_preset}`}
                       </span>
+                      {s.video_resolution && s.video_resolution !== 'original' && (
+                        <div style={{ fontSize:10, color:'var(--text3)', marginTop:1 }}>{s.video_resolution}</div>
+                      )}
+                      {s.audio_codec && (
+                        <div style={{ fontSize:10, color:'var(--text3)', marginTop:1 }}>
+                          🔊 {s.audio_codec}{s.audio_codec !== 'copy' ? ` ${s.audio_bitrate}` : ''}
+                        </div>
+                      )}
                     </td>
                     <td className="col-hide-xs"><span style={{ fontSize:12, color:'var(--text2)' }}>{s.buffer_seconds}s</span></td>
                     <td><StatusBadge status={s.status} /></td>

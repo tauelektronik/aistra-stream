@@ -441,10 +441,13 @@ class HLSManager:
         started  = sess["started_at"] if sess else None
         uptime   = int(asyncio.get_event_loop().time() - started) if started else 0
 
-        fps     = data.get("fps",     data.get("fps", "0"))
-        bitrate = data.get("bitrate", "")
-        frame   = data.get("frame",   data.get("frame", "0"))
-        speed   = data.get("speed",   "")
+        fps          = data.get("fps",   "0")
+        bitrate      = data.get("bitrate", "")
+        frame        = data.get("frame",  "0")
+        speed        = data.get("speed",  "")
+        drop_frames  = int(data.get("drop_frames", 0) or 0)
+        dup_frames   = int(data.get("dup_frames",  0) or 0)
+        total_size_b = int(data.get("total_size",  0) or 0)
 
         # Parse bitrate from progress file (format: "12345.6kbits/s" or "12345.6")
         bitrate_kbps = 0.0
@@ -455,12 +458,15 @@ class HLSManager:
                 bitrate_kbps = val if val < 100000 else val / 1000  # handle bps vs kbps
 
         return {
-            "running":      running,
-            "uptime_s":     uptime,
-            "fps":          fps,
-            "bitrate_kbps": round(bitrate_kbps, 1),
-            "frame":        frame,
-            "speed":        speed,
+            "running":        running,
+            "uptime_s":       uptime,
+            "fps":            fps,
+            "bitrate_kbps":   round(bitrate_kbps, 1),
+            "frame":          frame,
+            "speed":          speed,
+            "drop_frames":    drop_frames,
+            "dup_frames":     dup_frames,
+            "total_size_mb":  round(total_size_b / 1024 / 1024, 1) if total_size_b else 0,
         }
 
     # ── Recording ────────────────────────────────────────────────────────────

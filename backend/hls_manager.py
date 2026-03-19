@@ -57,6 +57,48 @@ def _height_from_resolution(res: str) -> int:
         return 0
 
 
+YTDLP         = os.getenv("YTDLP",          "/usr/local/bin/yt-dlp")
+YTDLP_COOKIES = os.getenv("YTDLP_COOKIES", "/opt/youtube_cookies.txt")
+
+_YT_RE = re.compile(
+    r'(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/(?:watch\?.*v=|live/|shorts/)|youtu\.be/)([A-Za-z0-9_-]{11})'
+)
+
+
+async def _resolve_youtube_url(url: str, target_height: int) -> str:
+    """Use yt-dlp to extract direct stream URL from a YouTube URL."""
+    import subprocess as _sp
+
+    if target_height:
+        fmt = f"best[height<={target_height}][ext=mp4]/best[height<={target_height}]/best"
+    else:
+        fmt = "best[ext=mp4]/best"
+
+    def _run():
+        try:
+            cmd = [YTDLP, "-g", "-f", fmt, "--no-playlist"]
+            if YTDLP_COOKIES and os.path.exists(YTDLP_COOKIES):
+                cmd += ["--cookies", YTDLP_COOKIES]
+            cmd.append(url)
+            result = _sp.run(
+                cmd,
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
+                if lines:
+                    logger.info("yt-dlp resolved %d URL(s) for %s", len(lines), url)
+                    return lines[0]   # video URL (audio merged by ffmpeg)
+            logger.warning("yt-dlp failed: %s", result.stderr[:300])
+            return url
+        except Exception as exc:
+            logger.warning("yt-dlp error: %s", exc)
+            return url
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _run)
+
+
 async def _resolve_hls_variant(url: str, target_height: int) -> str:
     """
     If *url* is an HLS master playlist, return the variant URL closest to
@@ -225,7 +267,7 @@ class HLSManager:
 
     def _get_active_url(self, stream) -> tuple[str, list]:
         """Return (active_url, all_urls) using round-robin index from backup_urls."""
-        urls = [stream.url]
+        urls = [stream.url.strip()]
         if stream.backup_urls:
             for u in stream.backup_urls.splitlines():
                 u = u.strip()
@@ -404,27 +446,35 @@ class HLSManager:
             ff_args = _build_ffmpeg_multi_quality_args(stream, hls_dir, url, qualities)
         else:
             # Single-quality mode
-            # For copy mode + explicit resolution: resolve the best HLS variant URL first
             active_url = url
-            if stream.video_codec == "copy" and stream.video_resolution not in ("", "original"):
-                target_h = _height_from_resolution(stream.video_resolution)
-                if target_h:
-                    active_url = await _resolve_hls_variant(url, target_h)
+            target_h = _height_from_resolution(stream.video_resolution)
+
+            # YouTube URLs: use yt-dlp to extract direct stream URL
+            if _YT_RE.search(url):
+                active_url = await _resolve_youtube_url(url, target_h or 720)
+            # For copy mode + explicit resolution: resolve the best HLS variant URL first
+            elif stream.video_codec == "copy" and target_h:
+                active_url = await _resolve_hls_variant(url, target_h)
 
             ff_bin = FFMPEG7 if os.path.exists(FFMPEG7) else FFMPEG
+            is_yt  = _YT_RE.search(url)
 
             ff_args = [
                 ff_bin, "-hide_banner",
-                "-fflags",      "+genpts+discardcorrupt",
+                "-fflags",      "+genpts+discardcorrupt+igndts",
                 "-err_detect",  "ignore_err",
                 "-analyzeduration", "3000000",
                 "-probesize",       "5000000",
-                "-reconnect",            "1",
-                "-reconnect_at_eof",     "1",
-                "-reconnect_streamed",   "1",
-                "-reconnect_delay_max",  "5",
-                "-allowed_extensions",   "ALL",
             ]
+            # reconnect flags only for HLS/HTTP streams, not yt-dlp direct URLs
+            if not is_yt:
+                ff_args += [
+                    "-reconnect",            "1",
+                    "-reconnect_at_eof",     "1",
+                    "-reconnect_streamed",   "1",
+                    "-reconnect_delay_max",  "5",
+                    "-allowed_extensions",   "ALL",
+                ]
             if stream.user_agent:
                 ff_args += ["-user_agent", stream.user_agent]
             ff_args += ["-i", active_url]

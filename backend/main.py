@@ -26,7 +26,7 @@ from backend.crud import (
     get_user_by_username, list_streams, list_users, update_stream, update_user,
 )
 from backend.database import get_db, init_db
-from backend.hls_manager import hls_manager
+from backend.hls_manager import hls_manager, HLS_BASE
 from backend.schemas import (
     LoginRequest, StreamCreate, StreamOut, StreamUpdate,
     TokenResponse, UserCreate, UserOut, UserUpdate,
@@ -296,19 +296,39 @@ async def api_stream_log(
 _VALID_QUALITY_RE = re.compile(r'^(360p|480p|720p|1080p)$')
 _VALID_SEGMENT_RE = re.compile(r'^seg\d{1,7}\.ts$')
 
-@app.get("/stream/{stream_id}/hls/{segment:path}")
-async def stream_hls(
+
+@app.get("/stream/{stream_id}/hls/stream.m3u8")
+async def stream_hls_master_playlist(
     stream_id: str,
-    segment: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """HLS playlist + segment delivery — supports single and multi-quality (ABR)."""
+    """Master playlist — triggers ffmpeg HLS session. Requires DB lookup."""
     stream = await get_stream(db, stream_id)
     if not stream or not stream.enabled:
         return Response(content="Stream não encontrado", status_code=404)
+    hls_dir, err = await hls_manager.get_hls_dir(stream)
+    if err:
+        return Response(content=f"Erro ao iniciar stream: {err}", status_code=503)
+    playlist = os.path.join(hls_dir, "stream.m3u8")
+    for _ in range(30):
+        if os.path.exists(playlist) and os.path.getsize(playlist) > 0:
+            break
+        await asyncio.sleep(1.0)
+    if not os.path.exists(playlist) or os.path.getsize(playlist) == 0:
+        return Response(content="Playlist não disponível ainda", status_code=503)
+    hls_manager.touch(stream_id)
+    return FileResponse(playlist, media_type="application/vnd.apple.mpegurl",
+                        headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
-    # Parse path safely: "stream.m3u8", "seg*.ts", "QUALITY/stream.m3u8", "QUALITY/seg*.ts"
+
+@app.get("/stream/{stream_id}/hls/{segment:path}")
+async def stream_hls_files(
+    stream_id: str,
+    segment: str,
+    request: Request,
+):
+    """HLS segments and quality sub-playlists — no DB lookup for high concurrency."""
     if ".." in segment:
         return Response(content="Não encontrado", status_code=404)
     parts = segment.split("/")
@@ -322,31 +342,16 @@ async def stream_hls(
         if not _VALID_QUALITY_RE.match(sub_quality):
             return Response(content="Não encontrado", status_code=404)
 
-    # ── Playlists ─────────────────────────────────────────────────────────────
+    # ── Quality variant playlists (e.g. 720p/stream.m3u8) ────────────────────
     if filename == "stream.m3u8":
-        if sub_quality:
-            # Variant playlist (already written by ffmpeg multi-quality)
-            q_playlist = os.path.join(HLS_BASE, stream_id, sub_quality, "stream.m3u8")
-            if not os.path.exists(q_playlist) or os.path.getsize(q_playlist) == 0:
-                return Response(content="Playlist de qualidade não disponível", status_code=404)
-            hls_manager.touch(stream_id)
-            return FileResponse(q_playlist, media_type="application/vnd.apple.mpegurl",
-                                headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-        else:
-            # Master playlist — triggers stream start
-            hls_dir, err = await hls_manager.get_hls_dir(stream)
-            if err:
-                return Response(content=f"Erro ao iniciar stream: {err}", status_code=503)
-            playlist = os.path.join(hls_dir, "stream.m3u8")
-            for _ in range(30):
-                if os.path.exists(playlist) and os.path.getsize(playlist) > 0:
-                    break
-                await asyncio.sleep(1.0)
-            if not os.path.exists(playlist) or os.path.getsize(playlist) == 0:
-                return Response(content="Playlist não disponível ainda", status_code=503)
-            hls_manager.touch(stream_id)
-            return FileResponse(playlist, media_type="application/vnd.apple.mpegurl",
-                                headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+        if not sub_quality:
+            return Response(content="Não encontrado", status_code=404)
+        q_playlist = os.path.join(HLS_BASE, stream_id, sub_quality, "stream.m3u8")
+        if not os.path.exists(q_playlist) or os.path.getsize(q_playlist) == 0:
+            return Response(content="Playlist de qualidade não disponível", status_code=404)
+        hls_manager.touch(stream_id)
+        return FileResponse(q_playlist, media_type="application/vnd.apple.mpegurl",
+                            headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
     # ── Segments ──────────────────────────────────────────────────────────────
     if not _VALID_SEGMENT_RE.match(filename):
@@ -356,7 +361,10 @@ async def stream_hls(
     if not os.path.exists(filepath):
         return Response(content="Segmento não encontrado", status_code=404)
     hls_manager.touch(stream_id)
-    return FileResponse(filepath, media_type="video/mp2t", headers={"Cache-Control": "no-cache"})
+    try:
+        return FileResponse(filepath, media_type="video/mp2t", headers={"Cache-Control": "no-cache"})
+    except FileNotFoundError:
+        return Response(content="Segmento não encontrado", status_code=404)
 
 
 # ── Stream player config ──────────────────────────────────────────────────────

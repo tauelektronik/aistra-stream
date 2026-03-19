@@ -107,9 +107,16 @@ function StreamPlayer({ streamId, bufferSeconds, onClose }: {
 function Row({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
     <div className="form-group">
-      <label>{label}</label>
+      <label>
+        {label}
+        {hint && (
+          <span className="tooltip-wrap">
+            <span className="tooltip-icon">?</span>
+            <span className="tooltip-box">{hint}</span>
+          </span>
+        )}
+      </label>
       {children}
-      {hint && <span className="form-hint">{hint}</span>}
     </div>
   )
 }

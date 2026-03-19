@@ -1117,9 +1117,10 @@ export default function Streams() {
   })
 
   function StatusBadge({ status }: { status: string }) {
-    const cls = status === 'running' ? 'badge-running' : status === 'error' ? 'badge-error' : 'badge-stopped'
-    const dot = status === 'running' ? '●' : status === 'error' ? '●' : '○'
-    return <span className={`badge ${cls}`}>{dot} {status}</span>
+    const cls   = status === 'running' ? 'badge-running' : status === 'error' ? 'badge-error' : 'badge-stopped'
+    const dot   = status === 'running' ? '●' : status === 'error' ? '●' : '○'
+    const label = status === 'running' ? 'rodando' : status === 'error' ? 'erro' : 'parado'
+    return <span className={`badge ${cls}`}>{dot} {label}</span>
   }
 
   function fmtUptime(sec: number) {

@@ -96,6 +96,8 @@ async def lifespan(app: FastAPI):
         hls_manager.TELEGRAM_CHAT_ID = _s["telegram_chat_id"]
     logger.info("aistra-stream started")
     yield
+    await hls_manager.shutdown()
+    logger.info("aistra-stream stopped")
 
 
 async def _ensure_default_admin():
@@ -320,7 +322,7 @@ async def api_update_stream(
         raise HTTPException(status_code=404, detail="Stream não encontrado")
     await hls_manager.stop_session(stream_id)
     out        = StreamOut.model_validate(s)
-    out.status = "stopped"
+    out.status = await hls_manager.get_status(s.id)  # always "stopped" post-kill, but consistent
     return out
 
 
@@ -808,7 +810,9 @@ async def stream_hls_master_playlist(
     if err:
         return Response(content=f"Erro ao iniciar stream: {err}", status_code=503)
     playlist = os.path.join(hls_dir, "stream.m3u8")
-    for _ in range(30):
+    # Timeout: at least 60 s, or 2× the stream's buffer_seconds (CENC/transcode can be slow)
+    wait_secs = max(60, getattr(stream, "buffer_seconds", 20) * 2)
+    for _ in range(wait_secs):
         if os.path.exists(playlist) and os.path.getsize(playlist) > 0:
             break
         await asyncio.sleep(1.0)

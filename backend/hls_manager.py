@@ -349,6 +349,22 @@ class HLSManager:
         self._watchdog_task = asyncio.create_task(self._watchdog_loop())
         logger.info("HLS manager: background cleanup + watchdog started")
 
+    async def shutdown(self):
+        """Cancel background tasks and kill all active sessions. Call on app shutdown."""
+        for task in (self._cleanup_task, self._watchdog_task):
+            if task and not task.done():
+                task.cancel()
+        if self._cleanup_task or self._watchdog_task:
+            await asyncio.gather(
+                *(t for t in (self._cleanup_task, self._watchdog_task) if t),
+                return_exceptions=True,
+            )
+        # Kill all running sessions gracefully
+        async with self._lock:
+            for sid in list(self._sessions):
+                await self._kill_session(sid)
+        logger.info("HLS manager: shutdown complete")
+
     async def stop_session(self, stream_id: str):
         async with self._lock:
             self._url_idx.pop(stream_id, None)

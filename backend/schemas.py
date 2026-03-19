@@ -153,7 +153,7 @@ def _validate_backup_urls(v: Optional[str]) -> Optional[str]:
 # ── Streams ───────────────────────────────────────────────────────────────────
 
 class StreamBase(BaseModel):
-    name:             str
+    name:             str = Field(..., min_length=1, max_length=100)
     url:              str
     drm_type:         str = "none"
     drm_keys:         Optional[str] = None   # "KID:KEY\nKID:KEY\n..." (CDM format)
@@ -180,6 +180,13 @@ class StreamBase(BaseModel):
     category:         Optional[str] = None   # free-form grouping tag, e.g. "Esportes"
     channel_num:      Optional[int] = Field(None, ge=1, le=99999)  # user-assigned channel number
     enabled:          bool = True
+
+    @field_validator("name")
+    @classmethod
+    def check_name(cls, v: str) -> str:
+        if any(c in v for c in '\n\r\0\t'):
+            raise ValueError("Nome não pode conter quebras de linha, tabs ou caracteres nulos")
+        return v.strip()
 
     @field_validator("url")
     @classmethod

@@ -217,12 +217,16 @@ async def api_create_user(
 async def api_update_user(
     user_id: int,
     body: UserUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    _=Depends(require_admin),
+    actor=Depends(require_admin),
 ):
     user = await update_user(db, user_id, body)
     if not user:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    audit.info("USER_UPDATE actor=%s target_id=%d fields=%s ip=%s",
+               actor.username, user_id, list(body.model_fields_set),
+               request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
     return user
 
 
@@ -318,8 +322,9 @@ async def api_get_stream(
 async def api_update_stream(
     stream_id: str,
     body: StreamUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    _=Depends(require_operator),
+    actor=Depends(require_operator),
 ):
     was_running = (await hls_manager.get_status(stream_id)) == "running"
     s = await update_stream(db, stream_id, body)
@@ -328,6 +333,9 @@ async def api_update_stream(
     await hls_manager.stop_session(stream_id)
     if was_running and s.enabled:
         await hls_manager.get_hls_dir(s, force_restart=True)
+    audit.info("STREAM_UPDATE actor=%s id=%s restarted=%s ip=%s",
+               actor.username, stream_id, was_running,
+               request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
     out        = StreamOut.model_validate(s)
     out.status = await hls_manager.get_status(s.id)
     return out
@@ -572,8 +580,9 @@ async def api_create_category(
 async def api_update_category(
     cat_id: int,
     body: CategoryUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    _=Depends(require_operator),
+    actor=Depends(require_operator),
 ):
     # If renaming, update category + all streams atomically in one transaction
     from sqlalchemy import update as sa_update
@@ -593,17 +602,24 @@ async def api_update_category(
         )
     await db.commit()
     await db.refresh(cat)
+    audit.info("CATEGORY_UPDATE actor=%s id=%d name=%s→%s ip=%s",
+               actor.username, cat_id, old_name, cat.name,
+               request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
     return cat
 
 
 @app.delete("/api/categories/{cat_id}", status_code=204)
 async def api_delete_category(
     cat_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    _=Depends(require_operator),
+    actor=Depends(require_operator),
 ):
     if not await delete_category(db, cat_id):
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    audit.info("CATEGORY_DELETE actor=%s id=%d ip=%s",
+               actor.username, cat_id,
+               request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
 
 
 @app.post("/api/categories/{cat_id}/logo")

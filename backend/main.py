@@ -111,9 +111,35 @@ async def lifespan(app: FastAPI):
     if _s.get("telegram_chat_id"):
         hls_manager.TELEGRAM_CHAT_ID = _s["telegram_chat_id"]
     logger.info("aistra-stream started")
+    asyncio.create_task(_autostart_enabled_streams())
     yield
     await hls_manager.shutdown()
     logger.info("aistra-stream stopped")
+
+
+async def _autostart_enabled_streams():
+    """On startup, auto-start all streams that have enabled=True."""
+    await asyncio.sleep(3)   # give DB + cleanup a moment to settle
+    from backend.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            streams = await list_streams(db)
+        enabled = [s for s in streams if getattr(s, "enabled", False)]
+        if not enabled:
+            return
+        logger.info("Autostart: starting %d enabled stream(s)…", len(enabled))
+        for s in enabled:
+            try:
+                hls_manager.enable_autoplay(s.id)
+                hls_dir, err = await hls_manager.get_hls_dir(s)
+                if err:
+                    logger.warning("Autostart %s: %s", s.id, err)
+                else:
+                    logger.info("Autostart %s: OK", s.id)
+            except Exception as exc:
+                logger.warning("Autostart %s failed: %s", s.id, exc)
+    except Exception as exc:
+        logger.error("_autostart_enabled_streams failed: %s", exc)
 
 
 async def _ensure_default_admin():
@@ -382,14 +408,42 @@ async def api_delete_stream(
                request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
 
 
+@app.post("/api/streams/{stream_id}/start", status_code=200)
+async def api_start_stream(
+    stream_id: str,
+    db: AsyncSession = Depends(get_db),
+    actor=Depends(require_operator),
+):
+    """Enable autoplay: start the stream and keep it running indefinitely."""
+    s = await get_stream(db, stream_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Stream não encontrado")
+    # Persist enabled=True
+    from backend.schemas import StreamUpdate as _SU
+    await update_stream(db, stream_id, _SU(enabled=True))
+    # Mark autoplay before starting (so watchdog/cleanup respect it immediately)
+    hls_manager.enable_autoplay(stream_id)
+    hls_dir, err = await hls_manager.get_hls_dir(s)
+    if err:
+        logger.warning("api_start_stream: get_hls_dir error for %s: %s", stream_id, err)
+    audit.info("STREAM_START actor=%s id=%s ip=%s",
+               actor.username, stream_id,
+               "api")
+    return {"status": "running", "enabled": True}
+
+
 @app.post("/api/streams/{stream_id}/stop", status_code=200)
 async def api_stop_stream(
     stream_id: str,
     db: AsyncSession = Depends(get_db),
     _=Depends(require_operator),
 ):
+    """Disable autoplay and stop the stream."""
+    from backend.schemas import StreamUpdate as _SU
+    await update_stream(db, stream_id, _SU(enabled=False))
+    hls_manager.disable_autoplay(stream_id)
     await hls_manager.stop_session(stream_id)
-    return {"status": "stopped"}
+    return {"status": "stopped", "enabled": False}
 
 
 @app.get("/api/streams/{stream_id}/log")

@@ -1065,8 +1065,12 @@ export default function Streams() {
     return () => { clearInterval(t); activeCtrl?.abort() }
   }, [streams])
 
-  async function stopStream(id: string) {
-    await api.post(`/api/streams/${id}/stop`)
+  async function toggleAutoplay(s: Stream) {
+    if (s.enabled) {
+      await api.post(`/api/streams/${s.id}/stop`)
+    } else {
+      await api.post(`/api/streams/${s.id}/start`)
+    }
     load()
   }
 
@@ -1343,15 +1347,32 @@ export default function Streams() {
                     <td><StatusBadge status={s.status} /></td>
                     <td>
                       <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
-                        <Tip text="Assistir o stream no player integrado (inicia o processamento se necessário)">
-                          <button className="btn btn-success btn-sm" onClick={() => setPlaying(s)}>
-                            <FiPlay size={12} />
-                          </button>
-                        </Tip>
+                        {canEdit && (
+                          <Tip text={s.enabled ? 'Stream ativo — clique para desligar (para o processamento e autoplay)' : 'Stream inativo — clique para ligar (inicia e mantém rodando automaticamente)'}>
+                            <button
+                              onClick={() => toggleAutoplay(s)}
+                              style={{
+                                width: 38, height: 22, borderRadius: 11, border: 'none', cursor: 'pointer',
+                                background: s.enabled ? 'var(--success)' : 'var(--bg3)',
+                                position: 'relative', transition: 'background .2s', flexShrink: 0,
+                                padding: 0,
+                              }}
+                              aria-label={s.enabled ? 'Desligar stream' : 'Ligar stream'}
+                            >
+                              <span style={{
+                                position: 'absolute', top: 3,
+                                left: s.enabled ? 19 : 3,
+                                width: 16, height: 16, borderRadius: '50%',
+                                background: '#fff', transition: 'left .2s',
+                                display: 'block',
+                              }} />
+                            </button>
+                          </Tip>
+                        )}
                         {s.status === 'running' && (
-                          <Tip text="Parar o processamento deste stream (libera recursos do servidor)">
-                            <button className="btn btn-ghost btn-sm" onClick={() => stopStream(s.id)}>
-                              <FiSquare size={12} />
+                          <Tip text="Assistir o stream no player integrado">
+                            <button className="btn btn-ghost btn-sm" onClick={() => setPlaying(s)}>
+                              <FiPlay size={12} />
                             </button>
                           </Tip>
                         )}

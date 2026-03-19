@@ -384,6 +384,7 @@ class HLSManager:
         self._ban_url_cooldown: dict = {}  # "stream_id:url_idx" → timestamp of ban (per URL)
         self._recordings:      dict = {}   # stream_id → {proc, path, started_at, duration_s, label, auto_task}
         self._schedules:       dict = {}   # sched_id  → {stream_id, start_at, duration_s, label, created_at}
+        self._autoplay:        set  = set()  # stream_ids that must stay running (never idle-killed, infinite restarts)
         self._starting:        set  = set()  # stream_ids currently being spawned (prevents duplicate starts)
         self._lock            = asyncio.Lock()
         self._cleanup_task:   Optional[asyncio.Task] = None
@@ -446,11 +447,12 @@ class HLSManager:
                 os.unlink(path)
             except OSError:
                 pass
-        # Clear ban state and URL cooldowns
+        # Clear ban state, URL cooldowns, autoplay flag
         self._ban_status.pop(stream_id, None)
         keys = [k for k in self._ban_url_cooldown if k.startswith(f"{stream_id}:")]
         for k in keys:
             self._ban_url_cooldown.pop(k, None)
+        self._autoplay.discard(stream_id)
 
     async def get_status(self, stream_id: str) -> str:
         sess = self._sessions.get(stream_id)
@@ -473,6 +475,15 @@ class HLSManager:
         self._url_idx.pop(stream_id, None)   # reset URL rotation
         self._restart_counts.pop(stream_id, None)
         logger.info("Ban cleared for stream %s", stream_id)
+
+    def enable_autoplay(self, stream_id: str):
+        """Mark a stream as autoplay: keep it running indefinitely (no idle-kill, infinite restarts)."""
+        self._autoplay.add(stream_id)
+        self._restart_counts.pop(stream_id, None)   # reset counter so watchdog restarts immediately
+
+    def disable_autoplay(self, stream_id: str):
+        """Remove a stream from autoplay mode."""
+        self._autoplay.discard(stream_id)
 
     def _get_active_url(self, stream) -> tuple[str, list]:
         urls = [stream.url.strip()]
@@ -1199,8 +1210,11 @@ class HLSManager:
         while True:
             await asyncio.sleep(30)
             now   = time.monotonic()
-            stale = [sid for sid, s in list(self._sessions.items())
-                     if now - s.get("last_touch", now) > 60]
+            stale = [
+                sid for sid, s in list(self._sessions.items())
+                if now - s.get("last_touch", now) > 60
+                and sid not in self._autoplay   # never idle-kill autoplay streams
+            ]
             for sid in stale:
                 logger.info("HLS cleanup: idle session %s", sid)
                 try:
@@ -1273,11 +1287,16 @@ class HLSManager:
                 if now - last_touch > 120:
                     continue   # idle — cleanup will handle it
                 count = self._restart_counts.get(sid, 0)
-                if count >= MAX_RESTARTS:
+                if count >= MAX_RESTARTS and sid not in self._autoplay:
                     if count == MAX_RESTARTS:
                         logger.warning("Stream %s: max restarts (%d) reached, giving up", sid, MAX_RESTARTS)
                         self._restart_counts[sid] = MAX_RESTARTS + 1
                     continue
+                # Autoplay streams: reset counter so they restart indefinitely
+                if sid in self._autoplay and count >= MAX_RESTARTS:
+                    logger.info("Stream %s: autoplay — resetting restart count (was %d)", sid, count)
+                    self._restart_counts[sid] = 0
+                    count = 0
                 last_restart = self._last_restart.get(sid, 0)
                 if now - last_restart < RESTART_DELAY_S:
                     continue   # too soon

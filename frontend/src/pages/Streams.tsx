@@ -744,16 +744,24 @@ export default function Streams() {
     return <span className={`badge ${cls}`}>{dot} {status}</span>
   }
 
+  function fmtUptime(sec: number) {
+    if (sec < 60)   return `${sec}s`
+    if (sec < 3600) return `${Math.floor(sec/60)}m ${sec%60}s`
+    const h = Math.floor(sec/3600)
+    const m = Math.floor((sec%3600)/60)
+    return m > 0 ? `${h}h ${m}m` : `${h}h`
+  }
+
   function StatsLine({ id }: { id: string }) {
     const s = stats[id]
     if (!s || !s.running) return null
-    const kbps = s.bitrate_kbps
-    const mbps = kbps > 0 ? (kbps > 1000 ? `${(kbps/1000).toFixed(1)} Mbps` : `${kbps} kbps`) : null
-    const fps  = s.fps && s.fps !== '0' ? `${s.fps} fps` : null
-    if (!mbps && !fps) return null
+    const kbps   = s.bitrate_kbps
+    const mbps   = kbps > 0 ? (kbps > 1000 ? `${(kbps/1000).toFixed(1)} Mbps` : `${kbps} kbps`) : null
+    const fps    = s.fps && s.fps !== '0' ? `${s.fps} fps` : null
+    const uptime = s.uptime_s > 0 ? `⏱ ${fmtUptime(s.uptime_s)}` : null
     return (
       <div style={{ fontSize:10, color:'var(--success)', marginTop:2 }}>
-        ⚡ {[mbps, fps].filter(Boolean).join(' · ')}
+        {[uptime, mbps && `⚡ ${mbps}`, fps].filter(Boolean).join(' · ')}
       </div>
     )
   }

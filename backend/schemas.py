@@ -64,6 +64,7 @@ _HEX_RE = re.compile(r'^[0-9a-fA-F]+$')
 def _validate_stream_url(v: Optional[str]) -> Optional[str]:
     if not v:
         return v
+    v = v.strip()   # remove leading/trailing whitespace and newlines
     if len(v) > 2048:
         raise ValueError("URL muito longa (máx 2048 caracteres)")
     if any(c in v for c in '\n\r\0\t'):

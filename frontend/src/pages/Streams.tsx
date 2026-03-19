@@ -278,6 +278,9 @@ function StreamModal({ stream, onSave, onClose }: {
     setSaving(true); setError('')
     try {
       const payload = { ...form }
+      // Trim URL and name to strip accidental newlines/spaces from copy-paste
+      if (payload.url)  payload.url  = payload.url.trim()
+      if (payload.name) payload.name = payload.name.trim()
       if (isNew && (!payload.id || payload.id.length < 2)) {
         payload.id = payload.name
           .toLowerCase()
@@ -341,7 +344,13 @@ function StreamModal({ stream, onSave, onClose }: {
               <input value={form.category ?? ''} onChange={e => set('category', e.target.value)} placeholder="Ex: Esportes" />
             </Row>
             <Row label="URL" hint="HLS (.m3u8), MPEG-TS, YouTube, CENC/CMAF">
-              <textarea value={form.url} onChange={e => set('url', e.target.value)} rows={3} placeholder="https://..." />
+              <textarea
+                value={form.url}
+                onChange={e => set('url', e.target.value.replace(/[\n\r]/g, ''))}
+                onKeyDown={e => e.key === 'Enter' && e.preventDefault()}
+                rows={3}
+                placeholder="https://..."
+              />
             </Row>
             <Row label="Tipo de stream">
               <Sel form={form} set={set} k="stream_type" opts={[['live','Ao vivo'],['vod','VOD / Arquivo']]} />

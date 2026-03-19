@@ -11,6 +11,7 @@ Background tasks:
 """
 import asyncio
 import glob
+import json
 import logging
 import os
 import re
@@ -18,7 +19,8 @@ import shutil
 import socket
 import time
 import urllib.request
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -380,30 +382,33 @@ class HLSManager:
         self._stall_counts:    dict = {}   # stream_id → consecutive zero-bitrate poll count
         self._ban_status:      dict = {}   # stream_id → {detected, http_code, url, at, count}
         self._ban_url_cooldown: dict = {}  # "stream_id:url_idx" → timestamp of ban (per URL)
-        self._recordings:      dict = {}   # stream_id → {proc, path, started_at}
+        self._recordings:      dict = {}   # stream_id → {proc, path, started_at, duration_s, label, auto_task}
+        self._schedules:       dict = {}   # sched_id  → {stream_id, start_at, duration_s, label, created_at}
         self._starting:        set  = set()  # stream_ids currently being spawned (prevents duplicate starts)
         self._lock            = asyncio.Lock()
         self._cleanup_task:   Optional[asyncio.Task] = None
         self._watchdog_task:  Optional[asyncio.Task] = None
+        self._schedule_task:  Optional[asyncio.Task] = None
+        self._schedules_file  = os.path.join(RECORDINGS_BASE, "_schedules.json")
+        self._load_schedules()
 
     # ── Public API ───────────────────────────────────────────────────────────
 
     def start_background_cleanup(self):
         """Call once from FastAPI startup event."""
-        self._cleanup_task  = asyncio.create_task(self._cleanup_loop())
-        self._watchdog_task = asyncio.create_task(self._watchdog_loop())
-        logger.info("HLS manager: background cleanup + watchdog started")
+        self._cleanup_task   = asyncio.create_task(self._cleanup_loop())
+        self._watchdog_task  = asyncio.create_task(self._watchdog_loop())
+        self._schedule_task  = asyncio.create_task(self._schedule_loop())
+        logger.info("HLS manager: background cleanup + watchdog + scheduler started")
 
     async def shutdown(self):
         """Cancel background tasks and kill all active sessions. Call on app shutdown."""
-        for task in (self._cleanup_task, self._watchdog_task):
+        for task in (self._cleanup_task, self._watchdog_task, self._schedule_task):
             if task and not task.done():
                 task.cancel()
-        if self._cleanup_task or self._watchdog_task:
-            await asyncio.gather(
-                *(t for t in (self._cleanup_task, self._watchdog_task) if t),
-                return_exceptions=True,
-            )
+        tasks = [t for t in (self._cleanup_task, self._watchdog_task, self._schedule_task) if t]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         # Kill all running sessions gracefully
         async with self._lock:
             for sid in list(self._sessions):
@@ -614,17 +619,29 @@ class HLSManager:
 
     # ── Recording ────────────────────────────────────────────────────────────
 
-    async def start_recording(self, stream_id: str) -> tuple[str, Optional[str]]:
-        """Start recording the HLS stream to an .mp4 file."""
+    async def start_recording(
+        self,
+        stream_id: str,
+        duration_s: Optional[int] = None,
+        label: Optional[str] = None,
+    ) -> tuple[str, Optional[str]]:
+        """Start recording the HLS stream to an .mp4 file.
+
+        Args:
+            stream_id:  Stream identifier.
+            duration_s: Stop recording after this many seconds (None = indefinite).
+            label:      Optional tag embedded in the output filename.
+        """
         if stream_id in self._recordings:
             rec = self._recordings[stream_id]
             if rec["proc"].returncode is None:
                 return rec["path"], None  # already recording
 
         os.makedirs(RECORDINGS_BASE, exist_ok=True)
-        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
-        sid  = _safe_id(stream_id)
-        path = os.path.join(RECORDINGS_BASE, f"{sid}_{ts}.mp4")
+        ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
+        sid = _safe_id(stream_id)
+        lbl = f"_{_safe_id(label)}" if label else ""
+        path = os.path.join(RECORDINGS_BASE, f"{sid}{lbl}_{ts}.mp4")
 
         # Read from HLS output directory
         hls_dir  = os.path.join(HLS_BASE, stream_id)
@@ -637,8 +654,11 @@ class HLSManager:
             "-i", playlist,
             "-c", "copy",
             "-movflags", "+faststart",
-            path,
         ]
+        if duration_s:
+            ff_args += ["-t", str(duration_s)]
+        ff_args.append(path)
+
         log  = _open_log(f"/tmp/ffmpeg_rec_{sid}.log")
         proc = await asyncio.wait_for(
             asyncio.create_subprocess_exec(
@@ -649,13 +669,32 @@ class HLSManager:
             ),
             timeout=15,
         )
+
+        # Background task that removes the entry once ffmpeg finishes naturally
+        async def _on_done():
+            try:
+                await proc.wait()
+            finally:
+                entry = self._recordings.get(stream_id)
+                if entry and entry.get("proc") is proc:
+                    self._recordings.pop(stream_id, None)
+                    try:
+                        log.close()
+                    except Exception:
+                        pass
+
+        auto_task = asyncio.create_task(_on_done())
+
         self._recordings[stream_id] = {
             "proc":       proc,
             "path":       path,
             "log":        log,
             "started_at": datetime.now().isoformat(),
+            "duration_s": duration_s,
+            "label":      label or "",
+            "auto_task":  auto_task,
         }
-        logger.info("Recording started for %s → %s", stream_id, path)
+        logger.info("Recording started for %s → %s (duration=%s)", stream_id, path, duration_s)
         return path, None
 
     async def stop_recording(self, stream_id: str) -> Optional[str]:
@@ -663,6 +702,10 @@ class HLSManager:
         rec = self._recordings.pop(stream_id, None)
         if not rec:
             return None
+        # Cancel the auto-done task
+        task = rec.get("auto_task")
+        if task and not task.done():
+            task.cancel()
         proc = rec["proc"]
         if proc.returncode is None:
             proc.terminate()
@@ -693,7 +736,104 @@ class HLSManager:
             "filename":   os.path.basename(rec["path"]),
             "started_at": rec["started_at"],
             "size_bytes": size,
+            "duration_s": rec.get("duration_s"),
+            "label":      rec.get("label", ""),
         }
+
+    # ── Schedule persistence ─────────────────────────────────────────────────
+
+    def _load_schedules(self):
+        try:
+            if os.path.isfile(self._schedules_file):
+                with open(self._schedules_file, "r") as f:
+                    self._schedules = json.load(f)
+                logger.info("Loaded %d schedule(s) from %s", len(self._schedules), self._schedules_file)
+        except Exception as exc:
+            logger.warning("Could not load schedules: %s", exc)
+
+    def _save_schedules(self):
+        try:
+            os.makedirs(RECORDINGS_BASE, exist_ok=True)
+            with open(self._schedules_file, "w") as f:
+                json.dump(self._schedules, f, indent=2)
+        except Exception as exc:
+            logger.warning("Could not save schedules: %s", exc)
+
+    def add_schedule(
+        self,
+        stream_id: str,
+        start_at: float,         # Unix timestamp
+        duration_s: Optional[int],
+        label: str = "",
+        repeat: str = "none",    # none / daily / weekly
+    ) -> str:
+        sched_id = str(uuid.uuid4())[:8]
+        self._schedules[sched_id] = {
+            "stream_id":  stream_id,
+            "start_at":   start_at,
+            "duration_s": duration_s,
+            "label":      label,
+            "repeat":     repeat,
+            "created_at": time.time(),
+        }
+        self._save_schedules()
+        logger.info("Schedule %s added: stream=%s start_at=%s repeat=%s", sched_id, stream_id, start_at, repeat)
+        return sched_id
+
+    def remove_schedule(self, sched_id: str) -> bool:
+        if sched_id not in self._schedules:
+            return False
+        del self._schedules[sched_id]
+        self._save_schedules()
+        logger.info("Schedule %s removed", sched_id)
+        return True
+
+    def list_schedules(self, stream_id: Optional[str] = None) -> list:
+        result = []
+        for sid, s in self._schedules.items():
+            if stream_id and s["stream_id"] != stream_id:
+                continue
+            result.append({"id": sid, **s})
+        result.sort(key=lambda x: x.get("start_at", 0))
+        return result
+
+    # ── Schedule background loop ─────────────────────────────────────────────
+
+    async def _schedule_loop(self):
+        """Check every 30 s for schedules that are due and fire them."""
+        while True:
+            await asyncio.sleep(30)
+            now = time.time()
+            to_fire = [
+                (sid, dict(s))
+                for sid, s in list(self._schedules.items())
+                if s.get("start_at", float("inf")) <= now
+            ]
+            for sched_id, sched in to_fire:
+                stream_id  = sched["stream_id"]
+                duration_s = sched.get("duration_s")
+                label      = sched.get("label") or "sched"
+                repeat     = sched.get("repeat", "none")
+
+                logger.info(
+                    "Schedule %s fired: stream=%s duration=%s repeat=%s",
+                    sched_id, stream_id, duration_s, repeat,
+                )
+                path, err = await self.start_recording(stream_id, duration_s=duration_s, label=label)
+                if err:
+                    logger.warning("Schedule %s: could not start recording for %s: %s", sched_id, stream_id, err)
+                else:
+                    logger.info("Schedule %s: recording started → %s", sched_id, path)
+
+                # Advance or remove
+                if repeat == "daily" and sched_id in self._schedules:
+                    self._schedules[sched_id]["start_at"] += 86400
+                elif repeat == "weekly" and sched_id in self._schedules:
+                    self._schedules[sched_id]["start_at"] += 7 * 86400
+                else:
+                    self._schedules.pop(sched_id, None)
+
+                self._save_schedules()
 
     @staticmethod
     def list_recordings(stream_id: Optional[str] = None) -> list[dict]:

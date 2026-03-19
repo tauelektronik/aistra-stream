@@ -10,8 +10,10 @@ import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -38,6 +40,20 @@ from backend.schemas import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 audit = logging.getLogger("aistra.audit")   # separate audit trail
+
+
+# ── Recording / Schedule request bodies ───────────────────────────────────────
+
+class RecordBody(BaseModel):
+    duration_s: Optional[int] = None    # seconds; None = indefinite
+    label:      Optional[str] = None    # tag embedded in filename
+
+class ScheduleCreate(BaseModel):
+    stream_id:  str
+    start_at:   float               # Unix timestamp
+    duration_s: Optional[int] = None
+    label:      Optional[str] = None
+    repeat:     str = "none"        # none / daily / weekly
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 LOGOS_BASE    = os.getenv("LOGOS_BASE", "/tmp/aistra_logos")
@@ -982,9 +998,14 @@ async def api_stream_log_live(
 @app.post("/api/streams/{stream_id}/record")
 async def api_start_recording(
     stream_id: str,
+    body: RecordBody = Body(default=RecordBody()),
     _=Depends(require_operator),
 ):
-    path, err = await hls_manager.start_recording(stream_id)
+    path, err = await hls_manager.start_recording(
+        stream_id,
+        duration_s=body.duration_s,
+        label=body.label,
+    )
     if err:
         raise HTTPException(status_code=400, detail=err)
     return {"recording": True, "filename": os.path.basename(path)}
@@ -1016,6 +1037,39 @@ async def api_list_recordings(
     _=Depends(require_operator),
 ):
     return hls_manager.list_recordings(stream_id or None)
+
+
+@app.get("/api/recordings/schedules")
+async def api_list_schedules(
+    stream_id: str = "",
+    _=Depends(require_operator),
+):
+    return hls_manager.list_schedules(stream_id or None)
+
+
+@app.post("/api/recordings/schedules", status_code=201)
+async def api_add_schedule(
+    body: ScheduleCreate,
+    _=Depends(require_operator),
+):
+    sched_id = hls_manager.add_schedule(
+        body.stream_id,
+        body.start_at,
+        body.duration_s,
+        body.label or "",
+        body.repeat,
+    )
+    return {"id": sched_id}
+
+
+@app.delete("/api/recordings/schedules/{sched_id}", status_code=204)
+async def api_delete_schedule(
+    sched_id: str,
+    _=Depends(require_operator),
+):
+    ok = hls_manager.remove_schedule(sched_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Agendamento não encontrado")
 
 
 @app.get("/api/recordings/{filename}")

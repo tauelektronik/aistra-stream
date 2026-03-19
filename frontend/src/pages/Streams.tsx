@@ -559,13 +559,100 @@ function StreamModal({ stream, onSave, onClose }: {
   )
 }
 
+// ─── Record dialog ────────────────────────────────────────────────────────────
+
+function RecordDialog({ streamName, onConfirm, onCancel }: {
+  streamName: string
+  onConfirm: (durationS: number | null, label: string) => void
+  onCancel: () => void
+}) {
+  const [mode, setMode]     = useState<'indefinite' | 'timed'>('indefinite')
+  const [minutes, setMinutes] = useState('60')
+  const [label, setLabel]   = useState('')
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel() }
+    document.addEventListener('keydown', h)
+    return () => document.removeEventListener('keydown', h)
+  }, [onCancel])
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onCancel()}>
+      <div className="modal" style={{ maxWidth: 380 }}>
+        <div className="modal-header">
+          <h2 style={{ fontSize: 15, fontWeight: 600 }}>Iniciar Gravação</h2>
+          <button className="btn btn-ghost btn-sm" onClick={onCancel}><FiX /></button>
+        </div>
+        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ fontSize: 13, color: 'var(--text2)' }}>{streamName}</div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text3)', display: 'block', marginBottom: 6 }}>Duração</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                <input type="radio" checked={mode === 'indefinite'} onChange={() => setMode('indefinite')} />
+                Indefinida (parar manualmente)
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                <input type="radio" checked={mode === 'timed'} onChange={() => setMode('timed')} />
+                Tempo determinado:
+              </label>
+              {mode === 'timed' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 22 }}>
+                  <input
+                    className="input"
+                    type="number"
+                    value={minutes}
+                    onChange={e => setMinutes(e.target.value)}
+                    min="1" max="1440"
+                    style={{ width: 70 }}
+                  />
+                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>minutos</span>
+                </div>
+              )}
+            </div>
+          </div>
+          <div>
+            <label className="label" style={{ display: 'block', marginBottom: 4 }}>Etiqueta (opcional)</label>
+            <input
+              className="input"
+              placeholder="ex: futebol, noticia…"
+              value={label}
+              onChange={e => setLabel(e.target.value)}
+              maxLength={40}
+            />
+          </div>
+        </div>
+        <div className="modal-footer" style={{ justifyContent: 'flex-end', gap: 8 }}>
+          <button className="btn btn-ghost" onClick={onCancel}>Cancelar</button>
+          <button
+            className="btn btn-primary"
+            onClick={() => onConfirm(mode === 'timed' ? parseInt(minutes || '60') * 60 : null, label.trim())}
+          >
+            <FiCircle size={12} style={{ fill: 'currentColor' }} /> Gravar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
 // ─── Recordings modal ─────────────────────────────────────────────────────────
 
 function RecordingsModal({ onClose }: { onClose: () => void }) {
+  const [tab, setTab]           = useState<'files' | 'schedules'>('files')
   const [recs, setRecs]         = useState<any[]>([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState('')
   const [downloading, setDl]    = useState<string | null>(null)
+
+  // Schedules tab state
+  const [schedules, setSchedules]     = useState<any[]>([])
+  const [schedsLoading, setSchedsLoad] = useState(false)
+  const [streams, setStreams]          = useState<{ id: string; name: string }[]>([])
+  const [newSched, setNewSched]        = useState({
+    stream_id: '', start_at: '', duration_min: '', label: '', repeat: 'none',
+  })
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -578,11 +665,50 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
       .then(r => setRecs(r.data))
       .catch(() => setError('Erro ao carregar gravações. Verifique se você tem permissão.'))
       .finally(() => setLoading(false))
+    api.get('/api/streams').then(r => setStreams(r.data)).catch(() => {})
   }, [])
+
+  function loadSchedules() {
+    setSchedsLoad(true)
+    api.get('/api/recordings/schedules')
+      .then(r => setSchedules(r.data))
+      .catch(() => {})
+      .finally(() => setSchedsLoad(false))
+  }
+
+  useEffect(() => { if (tab === 'schedules') loadSchedules() }, [tab])
+
+  async function deleteSchedule(id: string) {
+    await api.delete(`/api/recordings/schedules/${id}`)
+    setSchedules(prev => prev.filter(s => s.id !== id))
+  }
+
+  async function addSchedule() {
+    if (!newSched.stream_id || !newSched.start_at) return
+    const start_at = new Date(newSched.start_at).getTime() / 1000
+    const duration_s = newSched.duration_min ? parseInt(newSched.duration_min) * 60 : null
+    await api.post('/api/recordings/schedules', {
+      stream_id: newSched.stream_id,
+      start_at,
+      duration_s,
+      label: newSched.label || null,
+      repeat: newSched.repeat,
+    })
+    setNewSched({ stream_id: '', start_at: '', duration_min: '', label: '', repeat: 'none' })
+    loadSchedules()
+  }
 
   function fmt(bytes: number) {
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+  }
+
+  function fmtTs(unix: number) {
+    return new Date(unix * 1000).toLocaleString('pt-BR')
+  }
+
+  function repeatLabel(r: string) {
+    return r === 'daily' ? 'Diário' : r === 'weekly' ? 'Semanal' : 'Uma vez'
   }
 
   async function download(filename: string) {
@@ -602,54 +728,199 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth:700 }}>
+      <div className="modal" style={{ maxWidth: 720 }}>
         <div className="modal-header">
-          <h2 style={{ fontSize:15, fontWeight:600 }}>Gravações</h2>
+          <h2 style={{ fontSize: 15, fontWeight: 600 }}>Gravações</h2>
           <button className="btn btn-ghost btn-sm" onClick={onClose}><FiX /></button>
         </div>
-        <div className="modal-body" style={{ minHeight:200 }}>
-          {loading ? (
-            <div style={{ color:'var(--text3)', textAlign:'center', padding:32 }}>Carregando…</div>
-          ) : error ? (
-            <div style={{ color:'var(--danger)', textAlign:'center', padding:32, fontSize:13 }}>{error}</div>
-          ) : recs.length === 0 ? (
-            <div style={{ color:'var(--text3)', textAlign:'center', padding:32 }}>
-              <div style={{ fontSize:28, marginBottom:8 }}>📼</div>
-              Nenhuma gravação encontrada.<br />
-              <span style={{ fontSize:12 }}>Inicie uma gravação clicando no botão <FiCircle size={11} style={{ verticalAlign:'middle' }} /> em um stream ao vivo.</span>
-            </div>
-          ) : (
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign:'left', padding:'6px 8px', color:'var(--text3)' }}>Arquivo</th>
-                  <th style={{ textAlign:'right', padding:'6px 8px', color:'var(--text3)' }}>Tamanho</th>
-                  <th style={{ textAlign:'right', padding:'6px 8px', color:'var(--text3)' }}>Data</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {recs.map(r => (
-                  <tr key={r.filename} style={{ borderTop:'1px solid var(--border)' }}>
-                    <td style={{ padding:'8px 8px', fontFamily:'monospace', fontSize:11, color:'var(--text2)' }}>{r.filename}</td>
-                    <td style={{ padding:'8px 8px', textAlign:'right', color:'var(--text3)' }}>{fmt(r.size_bytes)}</td>
-                    <td style={{ padding:'8px 8px', textAlign:'right', color:'var(--text3)', fontSize:11 }}>
-                      {new Date(r.created_at).toLocaleString('pt-BR')}
-                    </td>
-                    <td style={{ padding:'8px 8px', textAlign:'right' }}>
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        title="Baixar"
-                        disabled={downloading === r.filename}
-                        onClick={() => download(r.filename)}
-                      >
-                        {downloading === r.filename ? '…' : <FiDownload size={12} />}
-                      </button>
-                    </td>
+
+        {/* Tab bar */}
+        <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', padding: '0 16px' }}>
+          {(['files', 'schedules'] as const).map(t => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              style={{
+                background: 'none', border: 'none', padding: '10px 16px', cursor: 'pointer',
+                fontSize: 13, color: tab === t ? 'var(--primary)' : 'var(--text3)',
+                borderBottom: tab === t ? '2px solid var(--primary)' : '2px solid transparent',
+                marginBottom: -1,
+              }}
+            >
+              {t === 'files' ? 'Arquivos' : 'Agendamentos'}
+            </button>
+          ))}
+        </div>
+
+        <div className="modal-body" style={{ minHeight: 220 }}>
+          {/* ── Files tab ── */}
+          {tab === 'files' && (
+            loading ? (
+              <div style={{ color: 'var(--text3)', textAlign: 'center', padding: 32 }}>Carregando…</div>
+            ) : error ? (
+              <div style={{ color: 'var(--danger)', textAlign: 'center', padding: 32, fontSize: 13 }}>{error}</div>
+            ) : recs.length === 0 ? (
+              <div style={{ color: 'var(--text3)', textAlign: 'center', padding: 32 }}>
+                <div style={{ fontSize: 28, marginBottom: 8 }}>📼</div>
+                Nenhuma gravação encontrada.<br />
+                <span style={{ fontSize: 12 }}>
+                  Clique em <FiCircle size={11} style={{ verticalAlign: 'middle' }} /> em um stream ao vivo para gravar.
+                </span>
+              </div>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text3)' }}>Arquivo</th>
+                    <th style={{ textAlign: 'right', padding: '6px 8px', color: 'var(--text3)' }}>Tamanho</th>
+                    <th style={{ textAlign: 'right', padding: '6px 8px', color: 'var(--text3)' }}>Data</th>
+                    <th />
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {recs.map(r => (
+                    <tr key={r.filename} style={{ borderTop: '1px solid var(--border)' }}>
+                      <td style={{ padding: '8px 8px', fontFamily: 'monospace', fontSize: 11, color: 'var(--text2)' }}>{r.filename}</td>
+                      <td style={{ padding: '8px 8px', textAlign: 'right', color: 'var(--text3)' }}>{fmt(r.size_bytes)}</td>
+                      <td style={{ padding: '8px 8px', textAlign: 'right', color: 'var(--text3)', fontSize: 11 }}>
+                        {new Date(r.created_at).toLocaleString('pt-BR')}
+                      </td>
+                      <td style={{ padding: '8px 8px', textAlign: 'right' }}>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          title="Baixar"
+                          disabled={downloading === r.filename}
+                          onClick={() => download(r.filename)}
+                        >
+                          {downloading === r.filename ? '…' : <FiDownload size={12} />}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )
+          )}
+
+          {/* ── Schedules tab ── */}
+          {tab === 'schedules' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {/* New schedule form */}
+              <div style={{ background: 'var(--bg2)', borderRadius: 6, padding: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 10 }}>
+                  Novo agendamento
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div>
+                    <label className="label">Stream</label>
+                    <select
+                      className="input"
+                      value={newSched.stream_id}
+                      onChange={e => setNewSched(p => ({ ...p, stream_id: e.target.value }))}
+                    >
+                      <option value="">Selecionar…</option>
+                      {streams.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Data e hora</label>
+                    <input
+                      className="input"
+                      type="datetime-local"
+                      value={newSched.start_at}
+                      onChange={e => setNewSched(p => ({ ...p, start_at: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Duração (min, vazio = indefinida)</label>
+                    <input
+                      className="input"
+                      type="number"
+                      placeholder="ex: 60"
+                      value={newSched.duration_min}
+                      onChange={e => setNewSched(p => ({ ...p, duration_min: e.target.value }))}
+                      min="1" max="1440"
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Repetição</label>
+                    <select
+                      className="input"
+                      value={newSched.repeat}
+                      onChange={e => setNewSched(p => ({ ...p, repeat: e.target.value }))}
+                    >
+                      <option value="none">Uma vez</option>
+                      <option value="daily">Diário</option>
+                      <option value="weekly">Semanal</option>
+                    </select>
+                  </div>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <label className="label">Etiqueta (opcional)</label>
+                    <input
+                      className="input"
+                      placeholder="ex: jornal, esportes…"
+                      value={newSched.label}
+                      onChange={e => setNewSched(p => ({ ...p, label: e.target.value }))}
+                      maxLength={40}
+                    />
+                  </div>
+                </div>
+                <div style={{ marginTop: 10, textAlign: 'right' }}>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    disabled={!newSched.stream_id || !newSched.start_at}
+                    onClick={addSchedule}
+                  >
+                    Agendar
+                  </button>
+                </div>
+              </div>
+
+              {/* Schedules list */}
+              {schedsLoading ? (
+                <div style={{ color: 'var(--text3)', textAlign: 'center', padding: 16 }}>Carregando…</div>
+              ) : schedules.length === 0 ? (
+                <div style={{ color: 'var(--text3)', textAlign: 'center', padding: 16, fontSize: 13 }}>
+                  Nenhum agendamento.
+                </div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text3)' }}>Stream</th>
+                      <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text3)' }}>Data/Hora</th>
+                      <th style={{ textAlign: 'right', padding: '6px 8px', color: 'var(--text3)' }}>Duração</th>
+                      <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text3)' }}>Repetição</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {schedules.map(s => (
+                      <tr key={s.id} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td style={{ padding: '8px 8px', color: 'var(--text2)' }}>
+                          {streams.find(x => x.id === s.stream_id)?.name || s.stream_id}
+                          {s.label && <span style={{ color: 'var(--text3)', marginLeft: 6, fontSize: 11 }}>({s.label})</span>}
+                        </td>
+                        <td style={{ padding: '8px 8px', color: 'var(--text3)', fontSize: 11 }}>{fmtTs(s.start_at)}</td>
+                        <td style={{ padding: '8px 8px', textAlign: 'right', color: 'var(--text3)' }}>
+                          {s.duration_s ? `${Math.round(s.duration_s / 60)} min` : '∞'}
+                        </td>
+                        <td style={{ padding: '8px 8px', color: 'var(--text3)' }}>{repeatLabel(s.repeat)}</td>
+                        <td style={{ padding: '8px 8px', textAlign: 'right' }}>
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            title="Remover"
+                            onClick={() => deleteSchedule(s.id)}
+                          >
+                            <FiTrash2 size={12} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -666,8 +937,9 @@ export default function Streams() {
   const [editing, setEditing]         = useState<Stream | null | 'new'>(null)
   const [playing, setPlaying]         = useState<Stream | null>(null)
   const [logStream, setLogStream]     = useState<string | null>(null)
-  const [showRecs, setShowRecs]       = useState(false)
-  const [recording, setRecording]     = useState<Record<string, boolean>>({})
+  const [showRecs, setShowRecs]         = useState(false)
+  const [recording, setRecording]       = useState<Record<string, boolean>>({})
+  const [recordTarget, setRecordTarget] = useState<Stream | null>(null)
   const [stats, setStats]             = useState<Record<string, StreamStats>>({})
   const [thumbnails, setThumbnails]   = useState<Record<string, string>>({})
   const thumbnailsRef                 = useRef<Record<string, string>>({})
@@ -804,13 +1076,25 @@ export default function Streams() {
     load()
   }
 
-  async function toggleRecord(id: string) {
-    if (recording[id]) {
-      await api.delete(`/api/streams/${id}/record`)
-      setRecording(prev => ({ ...prev, [id]: false }))
+  async function stopRecord(id: string) {
+    await api.delete(`/api/streams/${id}/record`)
+    setRecording(prev => ({ ...prev, [id]: false }))
+  }
+
+  async function startRecord(stream: Stream, durationS: number | null, label: string) {
+    setRecordTarget(null)
+    await api.post(`/api/streams/${stream.id}/record`, {
+      duration_s: durationS,
+      label: label || null,
+    })
+    setRecording(prev => ({ ...prev, [stream.id]: true }))
+  }
+
+  function toggleRecord(stream: Stream) {
+    if (recording[stream.id]) {
+      stopRecord(stream.id)
     } else {
-      await api.post(`/api/streams/${id}/record`)
-      setRecording(prev => ({ ...prev, [id]: true }))
+      setRecordTarget(stream)
     }
   }
 
@@ -1089,7 +1373,7 @@ export default function Streams() {
                             <button
                               className="btn btn-sm"
                               style={{ background: recording[s.id] ? 'rgba(239,68,68,.15)' : undefined, color: recording[s.id] ? 'var(--danger)' : undefined }}
-                              onClick={() => toggleRecord(s.id)}
+                              onClick={() => toggleRecord(s)}
                             >
                               <FiCircle size={12} style={{ fill: recording[s.id] ? 'currentColor' : 'none' }} />
                             </button>
@@ -1137,6 +1421,14 @@ export default function Streams() {
       {logStream && <LogModal streamId={logStream} onClose={() => setLogStream(null)} />}
 
       {showRecs && <RecordingsModal onClose={() => setShowRecs(false)} />}
+
+      {recordTarget && (
+        <RecordDialog
+          streamName={recordTarget.name}
+          onConfirm={(durationS, label) => startRecord(recordTarget, durationS, label)}
+          onCancel={() => setRecordTarget(null)}
+        />
+      )}
 
       {editing && (
         <StreamModal

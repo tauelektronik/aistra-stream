@@ -949,7 +949,6 @@ export default function Streams() {
   const [logStream, setLogStream]     = useState<string | null>(null)
   const [showRecs, setShowRecs]         = useState(false)
   const [recording, setRecording]       = useState<Record<string, boolean>>({})
-  const [recordTarget, setRecordTarget] = useState<Stream | null>(null)
   const [stats, setStats]             = useState<Record<string, StreamStats>>({})
   const [thumbnails, setThumbnails]   = useState<Record<string, string>>({})
   const thumbnailsRef                 = useRef<Record<string, string>>({})
@@ -1099,20 +1098,20 @@ export default function Streams() {
     setRecording(prev => ({ ...prev, [id]: false }))
   }
 
-  async function startRecord(stream: Stream, durationS: number | null, label: string) {
-    setRecordTarget(null)
-    await api.post(`/api/streams/${stream.id}/record`, {
-      duration_s: durationS,
-      label: label || null,
-    })
-    setRecording(prev => ({ ...prev, [stream.id]: true }))
+  async function startRecord(id: string) {
+    try {
+      await api.post(`/api/streams/${id}/record`)
+      setRecording(prev => ({ ...prev, [id]: true }))
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || 'Erro ao iniciar gravação')
+    }
   }
 
-  function toggleRecord(stream: Stream) {
-    if (recording[stream.id]) {
-      stopRecord(stream.id)
+  function toggleRecord(id: string) {
+    if (recording[id]) {
+      stopRecord(id)
     } else {
-      setRecordTarget(stream)
+      startRecord(id)
     }
   }
 
@@ -1409,7 +1408,7 @@ export default function Streams() {
                             <button
                               className="btn btn-sm"
                               style={{ background: recording[s.id] ? 'rgba(239,68,68,.15)' : undefined, color: recording[s.id] ? 'var(--danger)' : undefined }}
-                              onClick={() => toggleRecord(s)}
+                              onClick={() => toggleRecord(s.id)}
                             >
                               <FiCircle size={12} style={{ fill: recording[s.id] ? 'currentColor' : 'none' }} />
                             </button>
@@ -1458,13 +1457,6 @@ export default function Streams() {
 
       {showRecs && <RecordingsModal onClose={() => setShowRecs(false)} />}
 
-      {recordTarget && (
-        <RecordDialog
-          streamName={recordTarget.name}
-          onConfirm={(durationS, label) => startRecord(recordTarget, durationS, label)}
-          onCancel={() => setRecordTarget(null)}
-        />
-      )}
 
       {editing && (
         <StreamModal

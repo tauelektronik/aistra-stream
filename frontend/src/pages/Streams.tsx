@@ -346,7 +346,14 @@ function StreamModal({ stream, onSave, onClose }: {
             <Row label="URL" hint="HLS (.m3u8), MPEG-TS, YouTube, CENC/CMAF">
               <textarea
                 value={form.url}
-                onChange={e => set('url', e.target.value.replace(/[\n\r]/g, ''))}
+                onChange={e => {
+                  let v = e.target.value.replace(/[\n\r]/g, '')
+                  // Auto-extract real URL if pasted from a browser extension player
+                  // e.g. chrome-extension://xxx/player.html#https://real-url.m3u8
+                  const hashIdx = v.indexOf('#http')
+                  if (hashIdx !== -1) v = v.slice(hashIdx + 1)
+                  set('url', v)
+                }}
                 onKeyDown={e => e.key === 'Enter' && e.preventDefault()}
                 rows={3}
                 placeholder="https://..."

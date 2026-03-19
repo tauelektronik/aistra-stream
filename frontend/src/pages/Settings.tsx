@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { FiSave, FiAlertCircle, FiDownload, FiUpload, FiCheckCircle } from 'react-icons/fi'
+import { FiSave, FiAlertCircle, FiDownload, FiUpload, FiCheckCircle, FiPlus, FiTrash2, FiChevronDown, FiChevronUp } from 'react-icons/fi'
 import api from '../api'
 
 interface SettingsData {
@@ -20,8 +20,95 @@ function Row({ label, children, hint }: { label: string; children: React.ReactNo
   )
 }
 
+// ── Tutorial expansível ────────────────────────────────────────────────────
+function TelegramTutorial() {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{
+      border: '1px solid var(--border)', borderRadius: 8,
+      overflow: 'hidden', marginBottom: 16,
+    }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '10px 14px', background: 'var(--bg3)', border: 'none', cursor: 'pointer',
+          color: 'var(--text2)', fontSize: 13, fontWeight: 500,
+        }}
+      >
+        <span>📖 Como configurar o Telegram — passo a passo</span>
+        {open ? <FiChevronUp size={14} /> : <FiChevronDown size={14} />}
+      </button>
+
+      {open && (
+        <div style={{ padding: '16px 14px', display: 'flex', flexDirection: 'column', gap: 14, fontSize: 13 }}>
+
+          {/* Token */}
+          <div>
+            <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>
+              Passo 1 — Criar o Bot e obter o Token
+            </div>
+            <ol style={{ paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 5, color: 'var(--text2)' }}>
+              <li>Abra o Telegram e busque por <code style={{ background:'var(--bg4)', padding:'1px 5px', borderRadius:4 }}>@BotFather</code></li>
+              <li>Envie o comando <code style={{ background:'var(--bg4)', padding:'1px 5px', borderRadius:4 }}>/newbot</code></li>
+              <li>Digite um <strong>nome</strong> para o bot (ex: <em>Aistra Notificações</em>)</li>
+              <li>Digite um <strong>username</strong> para o bot — deve terminar em <em>bot</em> (ex: <em>aistra_notif_bot</em>)</li>
+              <li>O BotFather devolverá o <strong>Token</strong> no formato:<br />
+                <code style={{ background:'var(--bg4)', padding:'3px 8px', borderRadius:4, display:'inline-block', marginTop:4 }}>
+                  1234567890:ABCdefGhIJKlmNoPQRstuvwXYZ
+                </code>
+              </li>
+              <li>Cole esse token no campo <strong>Bot Token</strong> acima e salve.</li>
+            </ol>
+          </div>
+
+          <div style={{ borderTop: '1px solid var(--border)' }} />
+
+          {/* Chat ID pessoal */}
+          <div>
+            <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>
+              Passo 2 — Obter seu Chat ID pessoal
+            </div>
+            <ol style={{ paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 5, color: 'var(--text2)' }}>
+              <li>No Telegram, busque pelo bot que você criou e clique em <strong>Start / Iniciar</strong></li>
+              <li>Busque por <code style={{ background:'var(--bg4)', padding:'1px 5px', borderRadius:4 }}>@userinfobot</code> e envie <code style={{ background:'var(--bg4)', padding:'1px 5px', borderRadius:4 }}>/start</code> — ele mostrará seu ID numérico</li>
+              <li>Ou acesse no browser (substitua TOKEN pelo seu token):<br />
+                <code style={{ background:'var(--bg4)', padding:'3px 8px', borderRadius:4, display:'block', marginTop:4, wordBreak:'break-all' }}>
+                  https://api.telegram.org/botTOKEN/getUpdates
+                </code>
+              </li>
+              <li>Envie uma mensagem para o seu bot e recarregue a URL acima — procure por <code style={{ background:'var(--bg4)', padding:'1px 5px', borderRadius:4 }}>message.chat.id</code></li>
+              <li>O ID pessoal é um número positivo (ex: <em>987654321</em>)</li>
+            </ol>
+          </div>
+
+          <div style={{ borderTop: '1px solid var(--border)' }} />
+
+          {/* Grupo ou canal */}
+          <div>
+            <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>
+              Passo 3 — Usar um Grupo ou Canal (opcional)
+            </div>
+            <ol style={{ paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 5, color: 'var(--text2)' }}>
+              <li>Crie um grupo ou canal no Telegram</li>
+              <li>Adicione o seu bot como <strong>administrador</strong> do grupo/canal</li>
+              <li>Envie uma mensagem no grupo e acesse a URL <code style={{ background:'var(--bg4)', padding:'1px 5px', borderRadius:4 }}>getUpdates</code> acima</li>
+              <li>O ID de grupo/canal começa com <strong>-100</strong> (ex: <em>-1001234567890</em>)</li>
+            </ol>
+          </div>
+
+          <div style={{ background: 'var(--accent-glow)', border: '1px solid var(--accent)', borderRadius: 6, padding: '8px 12px', color: 'var(--accent)', fontSize: 12 }}>
+            💡 <strong>Dica:</strong> Você pode adicionar múltiplos Chat IDs abaixo para enviar notificações para várias pessoas ou grupos ao mesmo tempo.
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Settings() {
   const [form, setForm]       = useState<SettingsData>({})
+  const [chatIds, setChatIds] = useState<string[]>([''])  // multiple chat IDs
   const [loading, setLoading] = useState(true)
   const [saving, setSaving]   = useState(false)
   const [saved, setSaved]     = useState(false)
@@ -36,7 +123,13 @@ export default function Settings() {
 
   useEffect(() => {
     api.get('/api/settings')
-      .then(r => setForm(r.data || {}))
+      .then(r => {
+        const data = r.data || {}
+        setForm(data)
+        // Parse comma-separated chat IDs into array
+        const ids = (data.telegram_chat_id || '').split(',').map((s: string) => s.trim()).filter(Boolean)
+        setChatIds(ids.length > 0 ? ids : [''])
+      })
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [])
@@ -48,7 +141,9 @@ export default function Settings() {
   async function save() {
     setSaving(true); setSaved(false); setError('')
     try {
-      await api.put('/api/settings', form)
+      // Join non-empty chat IDs as comma-separated string
+      const ids = chatIds.map(s => s.trim()).filter(Boolean).join(',')
+      await api.put('/api/settings', { ...form, telegram_chat_id: ids })
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } catch (e: any) {
@@ -118,9 +213,12 @@ export default function Settings() {
         {/* Telegram Notifications */}
         <div className="card" style={{ padding: 24, marginBottom: 16 }}>
           <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Notificações Telegram</h2>
+
+          <TelegramTutorial />
+
           <Row
             label="Bot Token"
-            hint="Token do bot criado via @BotFather. Deixe em branco para desativar."
+            hint="Token do bot criado via @BotFather. Deixe em branco para desativar as notificações."
           >
             <input
               type="password"
@@ -130,16 +228,45 @@ export default function Settings() {
               autoComplete="off"
             />
           </Row>
-          <Row
-            label="Chat ID"
-            hint="ID do chat ou canal que receberá as notificações (ex: -1001234567890)."
-          >
-            <input
-              value={form.telegram_chat_id ?? ''}
-              onChange={e => set('telegram_chat_id', e.target.value)}
-              placeholder="-1001234567890"
-            />
-          </Row>
+
+          <div className="form-group" style={{ marginTop: 8 }}>
+            <label style={{ fontWeight: 500 }}>Chat IDs de destino</label>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
+              Adicione um ou mais IDs de chat, grupo ou canal. Cada um receberá as notificações.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {chatIds.map((id, i) => (
+                <div key={i} style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    value={id}
+                    onChange={e => {
+                      const next = [...chatIds]
+                      next[i] = e.target.value
+                      setChatIds(next)
+                    }}
+                    placeholder={i === 0 ? 'Ex: 987654321 (pessoal)' : 'Ex: -1001234567890 (grupo/canal)'}
+                    style={{ flex: 1 }}
+                  />
+                  {chatIds.length > 1 && (
+                    <button
+                      className="btn btn-danger btn-sm"
+                      onClick={() => setChatIds(chatIds.filter((_, j) => j !== i))}
+                      title="Remover"
+                    >
+                      <FiTrash2 size={13} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ marginTop: 6, alignSelf: 'flex-start' }}
+              onClick={() => setChatIds([...chatIds, ''])}
+            >
+              <FiPlus size={13} /> Adicionar destinatário
+            </button>
+          </div>
         </div>
 
         {/* Watchdog */}

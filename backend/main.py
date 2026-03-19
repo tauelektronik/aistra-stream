@@ -49,6 +49,7 @@ _login_attempts: dict = defaultdict(list)   # ip → [timestamps]
 LOGIN_LIMIT   = int(os.getenv("LOGIN_RATE_LIMIT", "10"))   # attempts
 LOGIN_WINDOW  = int(os.getenv("LOGIN_RATE_WINDOW", "60"))  # seconds
 
+
 def _check_rate_limit(ip: str):
     now = time.monotonic()
     attempts = [t for t in _login_attempts[ip] if now - t < LOGIN_WINDOW]
@@ -61,6 +62,21 @@ def _check_rate_limit(ip: str):
     _login_attempts[ip].append(now)
 
 
+async def _login_attempts_cleanup():
+    """Background task: purge expired IP entries every 5 minutes.
+    Prevents unbounded growth when many different IPs probe the login endpoint.
+    """
+    while True:
+        await asyncio.sleep(300)
+        now   = time.monotonic()
+        stale = [ip for ip, ts in list(_login_attempts.items())
+                 if not any(now - t < LOGIN_WINDOW for t in ts)]
+        for ip in stale:
+            _login_attempts.pop(ip, None)
+        if stale:
+            logger.debug("Rate limiter: purged %d stale IP entries", len(stale))
+
+
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -70,6 +86,7 @@ async def lifespan(app: FastAPI):
     hls_manager.startup_cleanup()
     hls_manager.start_background_cleanup()
     asyncio.create_task(_server_stats_updater())
+    asyncio.create_task(_login_attempts_cleanup())
     await _ensure_default_admin()
     # Apply persisted settings
     _s = _load_settings()
@@ -664,8 +681,6 @@ async def api_assign_streams(
     return {"assigned": count, "category": cat.name}
 
 
-# ── Server stats ──────────────────────────────────────────────────────────────
-
 # ── Server stats — background cache (updated every 5 s) ──────────────────────
 # Avoids holding a 0.5 s sleep inside the HTTP request handler, which would
 # block the connection and degrade performance under concurrent polling.
@@ -673,13 +688,39 @@ async def api_assign_streams(
 _server_stats_cache: dict = {}
 
 
+def _query_nvidia_smi() -> dict | None:
+    """Run nvidia-smi synchronously (called via executor — never on event loop)."""
+    import subprocess as _sp
+    try:
+        r = _sp.run(
+            ["nvidia-smi",
+             "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if r.returncode == 0:
+            parts = [p.strip() for p in r.stdout.strip().split(",")]
+            if len(parts) >= 5:
+                return {
+                    "name":            parts[0],
+                    "utilization_pct": int(parts[1]),
+                    "memory_used_mb":  int(parts[2]),
+                    "memory_total_mb": int(parts[3]),
+                    "temperature_c":   int(parts[4]),
+                }
+    except Exception:
+        pass
+    return None
+
+
 async def _server_stats_updater():
     """Background task: refresh server stats every 5 seconds."""
-    import psutil, subprocess as _sp
+    import psutil
 
     psutil.cpu_percent(interval=None)   # prime the CPU counter
 
     _net_prev_bytes = psutil.net_io_counters()
+    loop = asyncio.get_running_loop()
     while True:
         await asyncio.sleep(5)
         try:
@@ -687,31 +728,13 @@ async def _server_stats_updater():
             mem     = psutil.virtual_memory()
             disk    = psutil.disk_usage("/")
 
-            net_cur       = psutil.net_io_counters()
-            net_up_bps    = max(0, (net_cur.bytes_sent - _net_prev_bytes.bytes_sent) // 5)
-            net_down_bps  = max(0, (net_cur.bytes_recv - _net_prev_bytes.bytes_recv) // 5)
+            net_cur         = psutil.net_io_counters()
+            net_up_bps      = max(0, (net_cur.bytes_sent - _net_prev_bytes.bytes_sent) // 5)
+            net_down_bps    = max(0, (net_cur.bytes_recv - _net_prev_bytes.bytes_recv) // 5)
             _net_prev_bytes = net_cur
 
-            gpu = None
-            try:
-                r = _sp.run(
-                    ["nvidia-smi",
-                     "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
-                     "--format=csv,noheader,nounits"],
-                    capture_output=True, text=True, timeout=3,
-                )
-                if r.returncode == 0:
-                    parts = [p.strip() for p in r.stdout.strip().split(",")]
-                    if len(parts) >= 5:
-                        gpu = {
-                            "name":            parts[0],
-                            "utilization_pct": int(parts[1]),
-                            "memory_used_mb":  int(parts[2]),
-                            "memory_total_mb": int(parts[3]),
-                            "temperature_c":   int(parts[4]),
-                        }
-            except Exception:
-                pass
+            # nvidia-smi is blocking — run in thread pool to avoid stalling event loop
+            gpu = await loop.run_in_executor(None, _query_nvidia_smi)
 
             _server_stats_cache.update({
                 "cpu_pct":       round(cpu_pct, 1),
@@ -846,6 +869,7 @@ async def api_stream_stats(
 @app.get("/api/streams/{stream_id}/log/live")
 async def api_stream_log_live(
     stream_id: str,
+    request: Request,
     _=Depends(require_operator),
 ):
     """Server-Sent Events: tail the ffmpeg log file in real-time."""
@@ -863,6 +887,8 @@ async def api_stream_log_live(
                 yield f"data: {line}\n\n"
         yield "data: --- live ---\n\n"
         while True:
+            if await request.is_disconnected():
+                break
             await asyncio.sleep(0.5)
             if not os.path.exists(log_path):
                 continue

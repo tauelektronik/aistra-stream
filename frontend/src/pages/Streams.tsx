@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import Hls from 'hls.js'
-import { FiPlay, FiSquare, FiEdit2, FiTrash2, FiPlus, FiX, FiRefreshCw, FiExternalLink, FiVideo, FiAlertCircle } from 'react-icons/fi'
+import {
+  FiPlay, FiSquare, FiEdit2, FiTrash2, FiPlus, FiX, FiRefreshCw,
+  FiExternalLink, FiVideo, FiAlertCircle, FiTerminal, FiCircle,
+  FiDownload, FiImage,
+} from 'react-icons/fi'
 import api, { getHlsUrl } from '../api'
 
 // ─── types ────────────────────────────────────────────────────────────────────
@@ -18,6 +22,11 @@ interface Stream {
   output_qualities?: string; audio_track?: number
   enabled: boolean; status: string
   created_at: string; updated_at: string
+}
+
+interface StreamStats {
+  running: boolean; uptime_s: number
+  fps: string; bitrate_kbps: number; frame: string; speed: string
 }
 
 const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
@@ -60,7 +69,6 @@ function StreamPlayer({ streamId, bufferSeconds, onClose }: {
         enableWorker:                true,
         abrEwmaFastLive:             3.0,
         abrEwmaSlowLive:             9.0,
-        // Allow up to 60s for stream startup (PHP redirect + CDN + ffmpeg init)
         manifestLoadingTimeOut:      60000,
         manifestLoadingMaxRetry:     5,
         manifestLoadingRetryDelay:   3000,
@@ -72,7 +80,7 @@ function StreamPlayer({ streamId, bufferSeconds, onClose }: {
       hls.on(Hls.Events.MANIFEST_PARSED, () => { setStatus(''); video.play().catch(() => {}) })
       hls.on(Hls.Events.ERROR, (_e, d) => {
         if (d.fatal) setStatus(`Erro: ${d.details}`)
-        else if (d.type !== Hls.ErrorTypes.MEDIA_ERROR) return  // suppress non-fatal media errors
+        else if (d.type !== Hls.ErrorTypes.MEDIA_ERROR) return
       })
       hls.loadSource(url)
       hls.attachMedia(video)
@@ -102,7 +110,85 @@ function StreamPlayer({ streamId, bufferSeconds, onClose }: {
   )
 }
 
-// ─── Form helpers (defined OUTSIDE StreamModal to keep stable identity) ───────
+// ─── Live log modal ───────────────────────────────────────────────────────────
+
+function LogModal({ streamId, onClose }: { streamId: string; onClose: () => void }) {
+  const [lines, setLines]    = useState<string[]>([])
+  const bottomRef            = useRef<HTMLDivElement>(null)
+  const esRef                = useRef<EventSource | null>(null)
+
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    const url   = `/api/streams/${streamId}/log/live`
+    // Use fetch-based SSE with auth header (EventSource doesn't support headers)
+    let closed = false
+    const ctrl = new AbortController()
+
+    async function connect() {
+      try {
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: ctrl.signal,
+        })
+        if (!res.body) return
+        const reader = res.body.getReader()
+        const dec    = new TextDecoder()
+        let buf      = ''
+        while (!closed) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buf += dec.decode(value, { stream: true })
+          const parts = buf.split('\n')
+          buf = parts.pop() ?? ''
+          for (const part of parts) {
+            if (part.startsWith('data: ')) {
+              const line = part.slice(6)
+              setLines(prev => [...prev.slice(-499), line])
+            }
+          }
+        }
+      } catch {
+        // closed
+      }
+    }
+
+    connect()
+    return () => { closed = true; ctrl.abort(); esRef.current?.close() }
+  }, [streamId])
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [lines])
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth:860, width:'95vw' }}>
+        <div className="modal-header">
+          <h2 style={{ fontSize:15, fontWeight:600 }}>Log ao vivo — {streamId}</h2>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}><FiX /></button>
+        </div>
+        <div style={{
+          fontFamily:'monospace', fontSize:11, background:'#0d1117', color:'#c9d1d9',
+          padding:12, height:420, overflowY:'auto', borderRadius:6, margin:'0 16px 16px',
+        }}>
+          {lines.length === 0
+            ? <span style={{ color:'#666' }}>Aguardando log…</span>
+            : lines.map((l, i) => {
+                const color = l.includes('Error') || l.includes('error') ? '#f85149'
+                            : l.includes('--- live ---') ? '#58a6ff'
+                            : l.startsWith('frame=') ? '#3fb950'
+                            : '#c9d1d9'
+                return <div key={i} style={{ color, lineHeight:1.5 }}>{l}</div>
+              })
+          }
+          <div ref={bottomRef} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Form helpers ─────────────────────────────────────────────────────────────
 
 function Row({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -146,10 +232,10 @@ function StreamModal({ stream, onSave, onClose }: {
   stream: Partial<Stream> | null; onSave: () => void; onClose: () => void
 }) {
   const isNew = !stream?.id
-  const [tab, setTab]     = useState<'source'|'video'|'audio'|'hls'>('source')
-  const [form, setForm]   = useState<any>(stream ? { ...BLANK, ...stream } : { ...BLANK })
+  const [tab, setTab]       = useState<'source'|'video'|'audio'|'hls'>('source')
+  const [form, setForm]     = useState<any>(stream ? { ...BLANK, ...stream } : { ...BLANK })
   const [saving, setSaving] = useState(false)
-  const [error, setError]  = useState('')
+  const [error, setError]   = useState('')
 
   function set(k: string, v: any) { setForm((f: any) => ({ ...f, [k]: v })) }
 
@@ -157,7 +243,6 @@ function StreamModal({ stream, onSave, onClose }: {
     setSaving(true); setError('')
     try {
       const payload = { ...form }
-      // Auto-generate id from name if empty or too short
       if (isNew && (!payload.id || payload.id.length < 2)) {
         payload.id = payload.name
           .toLowerCase()
@@ -203,11 +288,11 @@ function StreamModal({ stream, onSave, onClose }: {
                      disabled={!isNew} placeholder="globo_hd" />
             </Row>
             <Row label="Nome"><input value={form.name} onChange={e => set('name', e.target.value)} placeholder="Globo HD" /></Row>
-            <Row label="URL" hint="HLS (.m3u8), MPEG-TS, ou CENC/CMAF">
+            <Row label="URL" hint="HLS (.m3u8), MPEG-TS, YouTube, CENC/CMAF">
               <textarea value={form.url} onChange={e => set('url', e.target.value)} rows={3} placeholder="https://..." />
             </Row>
             <Row label="Tipo de stream">
-              <Sel form={form} set={set} k="stream_type" opts={[['live','Ao vivo'],['vod','VOD']]} />
+              <Sel form={form} set={set} k="stream_type" opts={[['live','Ao vivo'],['vod','VOD / Arquivo']]} />
             </Row>
             <Row label="DRM">
               <Sel form={form} set={set} k="drm_type" opts={[['none','Sem DRM'],['cenc-ctr','CENC-CTR (Disney+, etc.)']]} />
@@ -218,7 +303,7 @@ function StreamModal({ stream, onSave, onClose }: {
                   rows={5}
                   value={form.drm_keys||''}
                   onChange={e => set('drm_keys', e.target.value)}
-                  placeholder={'c2e511d926db4f209e8cd856656e6bb1:4d67d0f698ad334072056dfbf61d4a99\n0101a79fc2c4cd3239893a14661661ac:dbbf91281e295228e8a49e273f77bd9d\n...'}
+                  placeholder={'c2e511d926db4f209e8cd856656e6bb1:4d67d0f698ad334072056dfbf61d4a99\n...'}
                   style={{ fontFamily:'monospace', fontSize:12, resize:'vertical' }}
                 />
               </Row>
@@ -228,19 +313,15 @@ function StreamModal({ stream, onSave, onClose }: {
               <label htmlFor="enabled" style={{ fontSize:13, color:'var(--text2)', cursor:'pointer' }}>Stream ativo</label>
             </div>
 
-            {/* ─── Rede / Proxy ────────────────────────────────────────────── */}
             <div style={{ marginTop:8, borderTop:'1px solid var(--border)', paddingTop:16 }}>
-              <div style={{ fontSize:11, fontWeight:600, color:'var(--text3)', marginBottom:12,
-                            textTransform:'uppercase', letterSpacing:'0.05em' }}>
+              <div style={{ fontSize:11, fontWeight:600, color:'var(--text3)', marginBottom:12, textTransform:'uppercase', letterSpacing:'0.05em' }}>
                 Rede / Proxy
               </div>
               <Row label="Proxy" hint="http://, https://, socks4://, socks5:// — ex: http://user:pass@host:3128">
-                <input value={form.proxy||''} onChange={e => set('proxy', e.target.value)}
-                       placeholder="http://proxy:3128" />
+                <input value={form.proxy||''} onChange={e => set('proxy', e.target.value)} placeholder="http://proxy:3128" />
               </Row>
               <Row label="User-Agent" hint="Deixe vazio para usar o padrão">
-                <input value={form.user_agent||''} onChange={e => set('user_agent', e.target.value)}
-                       placeholder="Mozilla/5.0 ..." />
+                <input value={form.user_agent||''} onChange={e => set('user_agent', e.target.value)} placeholder="Mozilla/5.0 ..." />
               </Row>
               <Row label="URLs de Backup / Balance" hint="Uma URL por linha — rodízio automático em caso de falha">
                 <textarea
@@ -263,7 +344,6 @@ function StreamModal({ stream, onSave, onClose }: {
               ]} />
             </Row>
 
-            {/* ─── Copy mode: resolução preferida (variant selection) ────── */}
             {form.video_codec === 'copy' && (
               <Row label="Resolução preferida"
                    hint="Para streams HLS multi-qualidade: escolhe o variant mais próximo da resolução selecionada">
@@ -276,7 +356,6 @@ function StreamModal({ stream, onSave, onClose }: {
               </Row>
             )}
 
-            {/* ─── Qualidades de saída / ABR ─────────────────────────────── */}
             {form.video_codec !== 'copy' && (
               <Row label="Qualidades de saída / ABR"
                    hint="Selecione 1 qualidade para saída fixa ou múltiplas para HLS adaptativo (ABR)">
@@ -287,9 +366,9 @@ function StreamModal({ stream, onSave, onClose }: {
                     { q:'480p',  vbr:'1400k', res:'854×480'   },
                     { q:'360p',  vbr:'800k',  res:'640×360'   },
                   ] as const).map(({ q, vbr, res }) => {
-                    const sel = (form.output_qualities||'').split(',').filter(Boolean)
+                    const sel     = (form.output_qualities||'').split(',').filter(Boolean)
                     const checked = sel.includes(q)
-                    const ORDER = ['1080p','720p','480p','360p']
+                    const ORDER   = ['1080p','720p','480p','360p']
                     return (
                       <label key={q} style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
                         <input type="checkbox" checked={checked} style={{ width:'auto', accentColor:'var(--accent)' }}
@@ -320,7 +399,6 @@ function StreamModal({ stream, onSave, onClose }: {
                   ['faster','faster'],['fast','fast'],['medium','medium'],
                 ]} />
               </Row>
-              {/* CRF e Resolução — apenas no modo qualidade única */}
               {!form.output_qualities && <>
                 <Row label={`CRF: ${form.video_crf} — qualidade (menor = melhor)`}>
                   <Num form={form} set={set} k="video_crf" min={0} max={51} />
@@ -339,8 +417,7 @@ function StreamModal({ stream, onSave, onClose }: {
 
           {tab === 'audio' && <>
             <Row label="Faixa de áudio" hint="Índice da faixa de entrada: 0 = primeira, 1 = segunda, etc.">
-              <select value={form.audio_track ?? 0}
-                      onChange={e => set('audio_track', Number(e.target.value))}>
+              <select value={form.audio_track ?? 0} onChange={e => set('audio_track', Number(e.target.value))}>
                 <option value={0}>0 — Primeira faixa (padrão)</option>
                 <option value={1}>1 — Segunda faixa</option>
                 <option value={2}>2 — Terceira faixa</option>
@@ -382,12 +459,10 @@ function StreamModal({ stream, onSave, onClose }: {
                 Saídas Adicionais (opcional)
               </div>
               <Row label="Saída RTMP" hint='Ex: rtmp://live.twitch.tv/live/STREAM_KEY'>
-                <input value={form.output_rtmp||''} onChange={e => set('output_rtmp', e.target.value)}
-                       placeholder="rtmp://..." />
+                <input value={form.output_rtmp||''} onChange={e => set('output_rtmp', e.target.value)} placeholder="rtmp://..." />
               </Row>
               <Row label="Saída UDP / Multicast" hint='Ex: udp://239.0.0.1:1234 ou udp://127.0.0.1:5000'>
-                <input value={form.output_udp||''} onChange={e => set('output_udp', e.target.value)}
-                       placeholder="udp://..." />
+                <input value={form.output_udp||''} onChange={e => set('output_udp', e.target.value)} placeholder="udp://..." />
               </Row>
             </div>
           </>}
@@ -406,15 +481,81 @@ function StreamModal({ stream, onSave, onClose }: {
   )
 }
 
+// ─── Recordings modal ─────────────────────────────────────────────────────────
+
+function RecordingsModal({ onClose }: { onClose: () => void }) {
+  const [recs, setRecs]   = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    api.get('/api/recordings').then(r => setRecs(r.data)).finally(() => setLoading(false))
+  }, [])
+
+  function fmt(bytes: number) {
+    if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB'
+    return (bytes/(1024*1024)).toFixed(1) + ' MB'
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth:700 }}>
+        <div className="modal-header">
+          <h2 style={{ fontSize:15, fontWeight:600 }}>Gravações</h2>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}><FiX /></button>
+        </div>
+        <div className="modal-body" style={{ minHeight:200 }}>
+          {loading ? (
+            <div style={{ color:'var(--text3)', textAlign:'center', padding:32 }}>Carregando…</div>
+          ) : recs.length === 0 ? (
+            <div style={{ color:'var(--text3)', textAlign:'center', padding:32 }}>Nenhuma gravação encontrada.</div>
+          ) : (
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign:'left', padding:'6px 8px', color:'var(--text3)' }}>Arquivo</th>
+                  <th style={{ textAlign:'right', padding:'6px 8px', color:'var(--text3)' }}>Tamanho</th>
+                  <th style={{ textAlign:'right', padding:'6px 8px', color:'var(--text3)' }}>Data</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {recs.map(r => (
+                  <tr key={r.filename} style={{ borderTop:'1px solid var(--border)' }}>
+                    <td style={{ padding:'8px 8px', fontFamily:'monospace', fontSize:11, color:'var(--text2)' }}>{r.filename}</td>
+                    <td style={{ padding:'8px 8px', textAlign:'right', color:'var(--text3)' }}>{fmt(r.size_bytes)}</td>
+                    <td style={{ padding:'8px 8px', textAlign:'right', color:'var(--text3)', fontSize:11 }}>
+                      {new Date(r.created_at).toLocaleString('pt-BR')}
+                    </td>
+                    <td style={{ padding:'8px 8px', textAlign:'right' }}>
+                      <a href={`/api/recordings/${r.filename}`} download className="btn btn-ghost btn-sm">
+                        <FiDownload size={12} />
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function Streams() {
-  const [streams, setStreams]       = useState<Stream[]>([])
-  const [loading, setLoading]       = useState(true)
-  const [editing, setEditing]       = useState<Stream | null | 'new'>(null)
-  const [playing, setPlaying]       = useState<Stream | null>(null)
-  const [deleting, setDeleting]     = useState<string | null>(null)
-  const user = JSON.parse(localStorage.getItem('user') || '{}')
+  const [streams, setStreams]         = useState<Stream[]>([])
+  const [loading, setLoading]         = useState(true)
+  const [editing, setEditing]         = useState<Stream | null | 'new'>(null)
+  const [playing, setPlaying]         = useState<Stream | null>(null)
+  const [logStream, setLogStream]     = useState<string | null>(null)
+  const [showRecs, setShowRecs]       = useState(false)
+  const [recording, setRecording]     = useState<Record<string, boolean>>({})
+  const [stats, setStats]             = useState<Record<string, StreamStats>>({})
+  const [thumbnails, setThumbnails]   = useState<Record<string, string>>({})
+
+  const user    = JSON.parse(localStorage.getItem('user') || '{}')
   const canEdit = user.role === 'admin' || user.role === 'operator'
 
   const load = useCallback(async () => {
@@ -425,8 +566,46 @@ export default function Streams() {
   }, [])
 
   useEffect(() => { load() }, [load])
-  // Auto-refresh status every 10s
   useEffect(() => { const t = setInterval(load, 10000); return () => clearInterval(t) }, [load])
+
+  // Poll stats for running streams every 5s
+  useEffect(() => {
+    const t = setInterval(async () => {
+      const running = streams.filter(s => s.status === 'running')
+      if (running.length === 0) return
+      const results = await Promise.allSettled(
+        running.map(s => api.get(`/api/streams/${s.id}/stats`))
+      )
+      const next: Record<string, StreamStats> = {}
+      running.forEach((s, i) => {
+        const r = results[i]
+        if (r.status === 'fulfilled') next[s.id] = r.value.data
+      })
+      setStats(prev => ({ ...prev, ...next }))
+    }, 5000)
+    return () => clearInterval(t)
+  }, [streams])
+
+  // Refresh thumbnails for running streams every 15s
+  useEffect(() => {
+    const t = setInterval(async () => {
+      const running = streams.filter(s => s.status === 'running')
+      for (const s of running) {
+        try {
+          const url = `/api/streams/${s.id}/thumbnail?t=${Date.now()}`
+          // Check if thumbnail exists
+          const r = await fetch(url, {
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+          })
+          if (r.ok) {
+            const blob = await r.blob()
+            setThumbnails(prev => ({ ...prev, [s.id]: URL.createObjectURL(blob) }))
+          }
+        } catch { /* ignore */ }
+      }
+    }, 15000)
+    return () => clearInterval(t)
+  }, [streams])
 
   async function stopStream(id: string) {
     await api.post(`/api/streams/${id}/stop`)
@@ -439,10 +618,34 @@ export default function Streams() {
     load()
   }
 
+  async function toggleRecord(id: string) {
+    if (recording[id]) {
+      await api.delete(`/api/streams/${id}/record`)
+      setRecording(prev => ({ ...prev, [id]: false }))
+    } else {
+      await api.post(`/api/streams/${id}/record`)
+      setRecording(prev => ({ ...prev, [id]: true }))
+    }
+  }
+
   function StatusBadge({ status }: { status: string }) {
     const cls = status === 'running' ? 'badge-running' : status === 'error' ? 'badge-error' : 'badge-stopped'
     const dot = status === 'running' ? '●' : status === 'error' ? '●' : '○'
     return <span className={`badge ${cls}`}>{dot} {status}</span>
+  }
+
+  function StatsLine({ id }: { id: string }) {
+    const s = stats[id]
+    if (!s || !s.running) return null
+    const kbps = s.bitrate_kbps
+    const mbps = kbps > 0 ? (kbps > 1000 ? `${(kbps/1000).toFixed(1)} Mbps` : `${kbps} kbps`) : null
+    const fps  = s.fps && s.fps !== '0' ? `${s.fps} fps` : null
+    if (!mbps && !fps) return null
+    return (
+      <div style={{ fontSize:10, color:'var(--success)', marginTop:2 }}>
+        ⚡ {[mbps, fps].filter(Boolean).join(' · ')}
+      </div>
+    )
   }
 
   return (
@@ -450,6 +653,9 @@ export default function Streams() {
       <div className="page-header">
         <h1>Streams</h1>
         <div className="page-header-actions">
+          <button className="btn btn-ghost btn-sm" onClick={() => setShowRecs(true)}>
+            <FiDownload size={13} /> Gravações
+          </button>
           <button className="btn btn-ghost btn-sm" onClick={load}><FiRefreshCw size={13} /> Atualizar</button>
           {canEdit && (
             <button className="btn btn-primary btn-sm" onClick={() => setEditing('new')}>
@@ -468,31 +674,30 @@ export default function Streams() {
           return (
             <div className="stats-row">
               <div className="stat-card">
-                <div className="stat-icon" style={{ color: 'var(--accent)' }}><FiVideo size={14} /></div>
-                <div className="stat-value" style={{ color: 'var(--accent)' }}>{total}</div>
+                <div className="stat-icon" style={{ color:'var(--accent)' }}><FiVideo size={14} /></div>
+                <div className="stat-value" style={{ color:'var(--accent)' }}>{total}</div>
                 <div className="stat-label">Total</div>
               </div>
               <div className="stat-card">
-                <div className="stat-icon" style={{ color: 'var(--success)' }}><FiPlay size={14} /></div>
-                <div className="stat-value" style={{ color: 'var(--success)' }}>{running}</div>
+                <div className="stat-icon" style={{ color:'var(--success)' }}><FiPlay size={14} /></div>
+                <div className="stat-value" style={{ color:'var(--success)' }}>{running}</div>
                 <div className="stat-label">Rodando</div>
               </div>
               <div className="stat-card">
-                <div className="stat-icon" style={{ color: 'var(--text3)' }}><FiSquare size={14} /></div>
-                <div className="stat-value" style={{ color: 'var(--text3)' }}>{stopped}</div>
+                <div className="stat-icon" style={{ color:'var(--text3)' }}><FiSquare size={14} /></div>
+                <div className="stat-value" style={{ color:'var(--text3)' }}>{stopped}</div>
                 <div className="stat-label">Parado</div>
               </div>
-              {errors > 0 && (
+              {errors > 0 ? (
                 <div className="stat-card">
-                  <div className="stat-icon" style={{ color: 'var(--danger)' }}><FiAlertCircle size={14} /></div>
-                  <div className="stat-value" style={{ color: 'var(--danger)' }}>{errors}</div>
+                  <div className="stat-icon" style={{ color:'var(--danger)' }}><FiAlertCircle size={14} /></div>
+                  <div className="stat-value" style={{ color:'var(--danger)' }}>{errors}</div>
                   <div className="stat-label">Erro</div>
                 </div>
-              )}
-              {errors === 0 && (
-                <div className="stat-card" style={{ opacity: 0.4 }}>
-                  <div className="stat-icon" style={{ color: 'var(--danger)' }}><FiAlertCircle size={14} /></div>
-                  <div className="stat-value" style={{ color: 'var(--danger)' }}>0</div>
+              ) : (
+                <div className="stat-card" style={{ opacity:0.4 }}>
+                  <div className="stat-icon" style={{ color:'var(--danger)' }}><FiAlertCircle size={14} /></div>
+                  <div className="stat-value" style={{ color:'var(--danger)' }}>0</div>
                   <div className="stat-label">Erro</div>
                 </div>
               )}
@@ -518,6 +723,7 @@ export default function Streams() {
             <table>
               <thead>
                 <tr>
+                  <th style={{ width:40 }}></th>
                   <th>Nome</th>
                   <th className="col-hide-xs">ID</th>
                   <th className="col-hide-xs">DRM</th>
@@ -530,11 +736,22 @@ export default function Streams() {
               <tbody>
                 {streams.map(s => (
                   <tr key={s.id}>
+                    {/* Thumbnail */}
+                    <td style={{ padding:'4px 8px' }}>
+                      {thumbnails[s.id] ? (
+                        <img src={thumbnails[s.id]} alt="" style={{ width:40, height:24, objectFit:'cover', borderRadius:3, background:'#000' }} />
+                      ) : (
+                        <div style={{ width:40, height:24, borderRadius:3, background:'var(--bg3)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                          <FiImage size={10} color="var(--text3)" />
+                        </div>
+                      )}
+                    </td>
                     <td>
                       <div style={{ fontWeight:500, color:'var(--text)' }}>{s.name}</div>
-                      <div style={{ fontSize:11, color:'var(--text3)', marginTop:2, maxWidth:280, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                        {s.url.length > 60 ? s.url.slice(0,60)+'…' : s.url}
+                      <div style={{ fontSize:11, color:'var(--text3)', marginTop:1, maxWidth:260, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                        {s.url.length > 55 ? s.url.slice(0,55)+'…' : s.url}
                       </div>
+                      <StatsLine id={s.id} />
                     </td>
                     <td className="col-hide-xs"><code style={{ fontSize:12, color:'var(--text2)' }}>{s.id}</code></td>
                     <td className="col-hide-xs">
@@ -551,28 +768,37 @@ export default function Streams() {
                     <td className="col-hide-xs"><span style={{ fontSize:12, color:'var(--text2)' }}>{s.buffer_seconds}s</span></td>
                     <td><StatusBadge status={s.status} /></td>
                     <td>
-                      <div style={{ display:'flex', gap:6 }}>
-                        <button className="btn btn-success btn-sm" title="Assistir"
-                                onClick={() => setPlaying(s)}>
+                      <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
+                        <button className="btn btn-success btn-sm" title="Assistir" onClick={() => setPlaying(s)}>
                           <FiPlay size={12} />
                         </button>
                         {s.status === 'running' && (
-                          <button className="btn btn-ghost btn-sm" title="Parar"
-                                  onClick={() => stopStream(s.id)}>
+                          <button className="btn btn-ghost btn-sm" title="Parar" onClick={() => stopStream(s.id)}>
                             <FiSquare size={12} />
                           </button>
                         )}
+                        <button className="btn btn-ghost btn-sm" title="Log ao vivo" onClick={() => setLogStream(s.id)}>
+                          <FiTerminal size={12} />
+                        </button>
+                        {canEdit && s.status === 'running' && (
+                          <button
+                            className="btn btn-sm"
+                            title={recording[s.id] ? 'Parar gravação' : 'Gravar stream'}
+                            style={{ background: recording[s.id] ? 'rgba(239,68,68,.15)' : undefined, color: recording[s.id] ? 'var(--danger)' : undefined }}
+                            onClick={() => toggleRecord(s.id)}
+                          >
+                            <FiCircle size={12} style={{ fill: recording[s.id] ? 'currentColor' : 'none' }} />
+                          </button>
+                        )}
                         <a href={getHlsUrl(s.id)} target="_blank" rel="noreferrer"
-                           className="btn btn-ghost btn-sm" title="Abrir URL">
+                           className="btn btn-ghost btn-sm" title="Abrir URL HLS">
                           <FiExternalLink size={12} />
                         </a>
                         {canEdit && <>
-                          <button className="btn btn-ghost btn-sm" title="Editar"
-                                  onClick={() => setEditing(s)}>
+                          <button className="btn btn-ghost btn-sm" title="Editar" onClick={() => setEditing(s)}>
                             <FiEdit2 size={12} />
                           </button>
-                          <button className="btn btn-danger btn-sm" title="Deletar"
-                                  onClick={() => deleteStream(s.id)}>
+                          <button className="btn btn-danger btn-sm" title="Deletar" onClick={() => deleteStream(s.id)}>
                             <FiTrash2 size={12} />
                           </button>
                         </>}
@@ -587,7 +813,6 @@ export default function Streams() {
         )}
       </div>
 
-      {/* Player overlay */}
       {playing && (
         <StreamPlayer
           streamId={playing.id}
@@ -596,7 +821,10 @@ export default function Streams() {
         />
       )}
 
-      {/* Stream form modal */}
+      {logStream && <LogModal streamId={logStream} onClose={() => setLogStream(null)} />}
+
+      {showRecs && <RecordingsModal onClose={() => setShowRecs(false)} />}
+
       {editing && (
         <StreamModal
           stream={editing === 'new' ? null : editing}

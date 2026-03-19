@@ -1,0 +1,52 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      # Database
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_USER=aistra
+      - DB_PASS=aistra_pass
+      - DB_NAME=aistra_stream
+      # JWT
+      - SECRET_KEY=change_me_in_production
+      # Telegram (optional)
+      - TELEGRAM_BOT_TOKEN=
+      - TELEGRAM_CHAT_ID=
+      # Watchdog
+      - HLS_MAX_RESTARTS=5
+      - HLS_RESTART_DELAY=15
+      # CORS (add your domain)
+      - ALLOWED_ORIGINS=http://localhost:8001
+    volumes:
+      - recordings:/data/recordings
+      - /opt/youtube_cookies.txt:/opt/youtube_cookies.txt:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=root_pass
+      - MYSQL_DATABASE=aistra_stream
+      - MYSQL_USER=aistra
+      - MYSQL_PASSWORD=aistra_pass
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "aistra", "-paistra_pass"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  db_data:
+  recordings:

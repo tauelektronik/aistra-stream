@@ -3,7 +3,11 @@ HLS Session Manager — aistra-stream
 Handles all streaming pipelines:
   • CENC-CTR (n_m3u8dl + FIFO + ffmpeg)
   • Plain HTTP/HTTPS (ffmpeg direct)
-Background cleanup kills sessions idle for >60 s.
+  • YouTube (yt-dlp + ffmpeg)
+
+Background tasks:
+  • Watchdog: auto-restart dead sessions (configurable retries + delay)
+  • Cleanup: kill idle sessions after 60 s
 """
 import asyncio
 import glob
@@ -12,20 +16,38 @@ import os
 import re
 import shutil
 import socket
+import time
+import urllib.request
+from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-HLS_BASE  = os.getenv("HLS_BASE",  "/tmp/aistra_stream_hls")
-PIPE_BASE = os.getenv("PIPE_BASE", "/tmp/aistra_stream_pipes")
-TMP_BASE  = os.getenv("TMP_BASE",  "/tmp/aistra_stream_tmp")
+HLS_BASE        = os.getenv("HLS_BASE",        "/tmp/aistra_stream_hls")
+PIPE_BASE       = os.getenv("PIPE_BASE",       "/tmp/aistra_stream_pipes")
+TMP_BASE        = os.getenv("TMP_BASE",        "/tmp/aistra_stream_tmp")
+RECORDINGS_BASE = os.getenv("RECORDINGS_BASE", "/tmp/aistra_recordings")
+THUMBNAILS_BASE = os.getenv("THUMBNAILS_BASE", "/tmp/aistra_thumbnails")
 
-N_M3U8DL    = os.getenv("N_M3U8DL",    "/usr/local/bin/n_m3u8dl")
-MP4DECRYPT  = os.getenv("MP4DECRYPT",  "/usr/local/bin/mp4decrypt")
-FFMPEG      = os.getenv("FFMPEG",      "/usr/bin/ffmpeg")
-FFMPEG7     = os.getenv("FFMPEG7",     "/usr/local/bin/ffmpeg7")
+N_M3U8DL   = os.getenv("N_M3U8DL",   "/usr/local/bin/n_m3u8dl")
+MP4DECRYPT = os.getenv("MP4DECRYPT", "/usr/local/bin/mp4decrypt")
+FFMPEG     = os.getenv("FFMPEG",     "/usr/bin/ffmpeg")
+FFMPEG7    = os.getenv("FFMPEG7",    "/usr/local/bin/ffmpeg7")
 
-# ABR quality presets: video bitrate / audio bitrate / scale filter
+YTDLP         = os.getenv("YTDLP",          "/usr/local/bin/yt-dlp")
+YTDLP_COOKIES = os.getenv("YTDLP_COOKIES", "/opt/youtube_cookies.txt")
+
+# Watchdog settings
+MAX_RESTARTS      = int(os.getenv("HLS_MAX_RESTARTS",      "5"))
+WATCHDOG_INTERVAL = int(os.getenv("HLS_WATCHDOG_INTERVAL", "10"))
+RESTART_DELAY_S   = int(os.getenv("HLS_RESTART_DELAY",     "15"))
+STABLE_RUN_S      = int(os.getenv("HLS_STABLE_RUN",        "60"))  # reset count after this many seconds running
+
+# Telegram
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID",   "")
+
+# ABR quality presets
 _QUALITY_PRESETS = {
     "1080p": {"scale": "1920:-2", "vbr": "4500k", "abr": "192k"},
     "720p":  {"scale": "1280:-2", "vbr": "2800k", "abr": "128k"},
@@ -35,7 +57,6 @@ _QUALITY_PRESETS = {
 
 
 def _alloc_port() -> int:
-    """Grab a free ephemeral UDP port."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.bind(("127.0.0.1", 0))
     p = s.getsockname()[1]
@@ -48,7 +69,6 @@ def _safe_id(stream_id: str) -> str:
 
 
 def _height_from_resolution(res: str) -> int:
-    """Return target height from resolution string, e.g. '1280x720' → 720. 0 = auto."""
     if not res or res == "original":
         return 0
     try:
@@ -57,16 +77,35 @@ def _height_from_resolution(res: str) -> int:
         return 0
 
 
-YTDLP         = os.getenv("YTDLP",          "/usr/local/bin/yt-dlp")
-YTDLP_COOKIES = os.getenv("YTDLP_COOKIES", "/opt/youtube_cookies.txt")
-
 _YT_RE = re.compile(
     r'(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/(?:watch\?.*v=|live/|shorts/)|youtu\.be/)([A-Za-z0-9_-]{11})'
 )
 
 
+# ── Telegram ──────────────────────────────────────────────────────────────────
+
+async def _send_telegram(message: str) -> None:
+    """Fire-and-forget Telegram notification. Silently ignores errors."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+
+    def _post():
+        try:
+            url  = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            data = f"chat_id={TELEGRAM_CHAT_ID}&text={urllib.request.quote(message)}&parse_mode=HTML"
+            req  = urllib.request.Request(url, data=data.encode(), method="POST")
+            req.add_header("Content-Type", "application/x-www-form-urlencoded")
+            urllib.request.urlopen(req, timeout=8)
+        except Exception as exc:
+            logger.debug("Telegram send failed: %s", exc)
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _post)
+
+
+# ── YouTube URL resolver ───────────────────────────────────────────────────────
+
 async def _resolve_youtube_url(url: str, target_height: int) -> str:
-    """Use yt-dlp to extract direct stream URL from a YouTube URL."""
     import subprocess as _sp
 
     if target_height:
@@ -80,15 +119,12 @@ async def _resolve_youtube_url(url: str, target_height: int) -> str:
             if YTDLP_COOKIES and os.path.exists(YTDLP_COOKIES):
                 cmd += ["--cookies", YTDLP_COOKIES]
             cmd.append(url)
-            result = _sp.run(
-                cmd,
-                capture_output=True, text=True, timeout=30
-            )
+            result = _sp.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
                 lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
                 if lines:
                     logger.info("yt-dlp resolved %d URL(s) for %s", len(lines), url)
-                    return lines[0]   # video URL (audio merged by ffmpeg)
+                    return lines[0]
             logger.warning("yt-dlp failed: %s", result.stderr[:300])
             return url
         except Exception as exc:
@@ -99,39 +135,33 @@ async def _resolve_youtube_url(url: str, target_height: int) -> str:
     return await loop.run_in_executor(None, _run)
 
 
+# ── HLS variant selector ──────────────────────────────────────────────────────
+
 async def _resolve_hls_variant(url: str, target_height: int) -> str:
-    """
-    If *url* is an HLS master playlist, return the variant URL closest to
-    *target_height*. Falls back to *url* unchanged on any error or if the
-    response is already a variant/TS stream.
-    """
-    import urllib.request as _req
-    import urllib.parse   as _urlparse
+    import urllib.parse as _urlparse
 
     def _fetch() -> str:
         try:
-            req = _req.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with _req.urlopen(req, timeout=12) as resp:
-                final_url = resp.url          # URL after HTTP redirects
-                raw       = resp.read(65536)  # read first 64 KB — enough for any playlist
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                final_url = resp.url
+                raw       = resp.read(65536)
             text = raw.decode("utf-8", errors="replace")
             if "#EXTM3U" not in text or "#EXT-X-STREAM-INF" not in text:
-                return final_url   # already a variant playlist or not HLS
+                return final_url
 
-            variants: list[tuple[int, str]] = []   # (height, abs_url)
+            variants: list[tuple[int, str]] = []
             lines = text.splitlines()
             for i, line in enumerate(lines):
                 if line.startswith("#EXT-X-STREAM-INF:"):
                     m = re.search(r"RESOLUTION=\d+x(\d+)", line)
                     if m and i + 1 < len(lines):
-                        h      = int(m.group(1))
-                        rel    = lines[i + 1].strip()
+                        h   = int(m.group(1))
+                        rel = lines[i + 1].strip()
                         if rel and not rel.startswith("#"):
                             variants.append((h, _urlparse.urljoin(final_url, rel)))
-
             if not variants:
                 return final_url
-
             variants.sort(key=lambda v: abs(v[0] - target_height))
             chosen_h, chosen_url = variants[0]
             logger.info("HLS variant selected: %dp (target %dp) from %d variants",
@@ -145,8 +175,9 @@ async def _resolve_hls_variant(url: str, target_height: int) -> str:
     return await loop.run_in_executor(None, _fetch)
 
 
+# ── ffmpeg arg builders ───────────────────────────────────────────────────────
+
 def _build_ffmpeg_video_args(stream) -> list:
-    """Return ffmpeg video encoding arguments based on stream config."""
     codec = stream.video_codec
     if codec == "copy":
         return ["-c:v", "copy"]
@@ -161,7 +192,6 @@ def _build_ffmpeg_video_args(stream) -> list:
     if stream.video_resolution not in ("", "original"):
         w, h = stream.video_resolution.split("x") if "x" in stream.video_resolution else (stream.video_resolution, -2)
         args += ["-vf", f"scale={w}:{h}"]
-    # Force keyframe at every segment boundary so each segment is self-contained
     args += ["-force_key_frames", f"expr:gte(t,n_forced*{stream.hls_time})"]
     return args
 
@@ -173,11 +203,9 @@ def _build_ffmpeg_audio_args(stream) -> list:
 
 
 def _build_ffmpeg_multi_quality_args(stream, hls_dir: str, url: str, qualities: list[str]) -> list:
-    """Build ffmpeg args for multi-quality ABR HLS output using filter_complex split+scale."""
     ff_bin = FFMPEG7 if os.path.exists(FFMPEG7) else FFMPEG
     n = len(qualities)
 
-    # filter_complex: split input video into N copies and scale each
     splits = "".join(f"[v{i}]" for i in range(n))
     scales = "; ".join(
         f"[v{i}]scale={_QUALITY_PRESETS[q]['scale']}[v{i}out]"
@@ -187,8 +215,8 @@ def _build_ffmpeg_multi_quality_args(stream, hls_dir: str, url: str, qualities: 
 
     args = [
         ff_bin, "-hide_banner",
-        "-fflags",      "+genpts+discardcorrupt",
-        "-err_detect",  "ignore_err",
+        "-fflags",          "+genpts+discardcorrupt",
+        "-err_detect",      "ignore_err",
         "-analyzeduration", "3000000",
         "-probesize",       "5000000",
         "-reconnect",           "1",
@@ -201,60 +229,113 @@ def _build_ffmpeg_multi_quality_args(stream, hls_dir: str, url: str, qualities: 
         args += ["-user_agent", stream.user_agent]
     args += ["-i", url, "-filter_complex", fc]
 
-    # Map: video_i, audio for each quality
     audio_idx = getattr(stream, "audio_track", 0)
     for i in range(n):
         args += ["-map", f"[v{i}out]", "-map", f"0:a:{audio_idx}?"]
 
-    # Video encoding — libx264 (copy can't scale)
     preset = stream.video_preset if stream.video_codec != "copy" else "ultrafast"
     args += ["-c:v", "libx264", "-preset", preset]
     for i, q in enumerate(qualities):
-        vbr = _QUALITY_PRESETS[q]["vbr"]
+        vbr     = _QUALITY_PRESETS[q]["vbr"]
         bufsize = str(int(vbr.replace("k", "")) * 2) + "k"
         args += [f"-b:v:{i}", vbr, f"-maxrate:v:{i}", vbr, f"-bufsize:v:{i}", bufsize]
 
-    # Audio encoding
     args += ["-c:a", "aac"]
     for i, q in enumerate(qualities):
         args += [f"-b:a:{i}", _QUALITY_PRESETS[q]["abr"], f"-ar:a:{i}", "48000"]
 
-    # Create subdirectories
     for q in qualities:
         os.makedirs(os.path.join(hls_dir, q), exist_ok=True)
 
-    # var_stream_map uses quality names so %v → e.g. "720p"
     vsm = " ".join(f"v:{i},a:{i},name:{q}" for i, q in enumerate(qualities))
     args += [
-        "-var_stream_map", vsm,
-        "-master_pl_name", "stream.m3u8",
-        "-f", "hls",
-        "-hls_time",      str(stream.hls_time),
-        "-hls_list_size", str(stream.hls_list_size),
-        "-hls_flags",     "delete_segments+independent_segments",
+        "-var_stream_map",       vsm,
+        "-master_pl_name",       "stream.m3u8",
+        "-f",                    "hls",
+        "-hls_time",             str(stream.hls_time),
+        "-hls_list_size",        str(stream.hls_list_size),
+        "-hls_flags",            "delete_segments+independent_segments",
         "-hls_segment_filename", os.path.join(hls_dir, "%v", "seg%05d.ts"),
         os.path.join(hls_dir, "%v", "stream.m3u8"),
     ]
     return args
 
 
+# ── Helpers: parse ffmpeg -progress file ─────────────────────────────────────
+
+def _parse_progress_file(path: str) -> dict:
+    """Read the last block from a ffmpeg -progress file."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", errors="replace") as f:
+            content = f.read()
+        # Split into blocks separated by "progress=continue" or "progress=end"
+        blocks = re.split(r'progress=(?:continue|end)', content)
+        if not blocks:
+            return {}
+        last = blocks[-2] if len(blocks) >= 2 else blocks[-1]
+        result = {}
+        for line in last.strip().splitlines():
+            line = line.strip()
+            if "=" in line:
+                k, _, v = line.partition("=")
+                result[k.strip()] = v.strip()
+        return result
+    except Exception:
+        return {}
+
+
+def _parse_stats_from_log(path: str) -> dict:
+    """Fallback: parse latest ffmpeg progress line from log file."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 8192))
+            tail = f.read().decode("utf-8", errors="replace")
+        # frame= 1234 fps= 30 q=26.0 size=   1234kB time=00:00:41.20 bitrate=2456.7kbits/s
+        for line in reversed(tail.splitlines()):
+            m = re.search(r'frame=\s*(\d+).*fps=\s*([\d.]+).*bitrate=\s*([\d.]+)kbits/s', line)
+            if m:
+                return {
+                    "frame":   m.group(1),
+                    "fps":     m.group(2),
+                    "bitrate": m.group(3) + "kbits/s",
+                }
+        return {}
+    except Exception:
+        return {}
+
+
+# ── HLSManager ────────────────────────────────────────────────────────────────
+
 class HLSManager:
     def __init__(self):
-        self._sessions: dict = {}   # stream_id → session dict
-        self._url_idx:  dict = {}   # stream_id → current URL index (failover/balance)
-        self._lock = asyncio.Lock()
-        self._cleanup_task: Optional[asyncio.Task] = None
+        self._sessions:        dict = {}   # stream_id → session dict
+        self._url_idx:         dict = {}   # stream_id → current URL index
+        self._restart_counts:  dict = {}   # stream_id → consecutive restart count
+        self._last_restart:    dict = {}   # stream_id → timestamp of last restart
+        self._recordings:      dict = {}   # stream_id → {proc, path, started_at}
+        self._lock            = asyncio.Lock()
+        self._cleanup_task:   Optional[asyncio.Task] = None
+        self._watchdog_task:  Optional[asyncio.Task] = None
 
     # ── Public API ───────────────────────────────────────────────────────────
 
     def start_background_cleanup(self):
         """Call once from FastAPI startup event."""
-        self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-        logger.info("HLS manager: background cleanup started")
+        self._cleanup_task  = asyncio.create_task(self._cleanup_loop())
+        self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+        logger.info("HLS manager: background cleanup + watchdog started")
 
     async def stop_session(self, stream_id: str):
         async with self._lock:
-            self._url_idx.pop(stream_id, None)   # reset failover index on explicit stop
+            self._url_idx.pop(stream_id, None)
+            self._restart_counts.pop(stream_id, None)
+            self._last_restart.pop(stream_id, None)
             await self._kill_session(stream_id)
 
     async def get_status(self, stream_id: str) -> str:
@@ -266,7 +347,6 @@ class HLSManager:
         return "error"
 
     def _get_active_url(self, stream) -> tuple[str, list]:
-        """Return (active_url, all_urls) using round-robin index from backup_urls."""
         urls = [stream.url.strip()]
         if stream.backup_urls:
             for u in stream.backup_urls.splitlines():
@@ -286,7 +366,7 @@ class HLSManager:
                 if sess["proc"].returncode is None:
                     sess["last_touch"] = asyncio.get_event_loop().time()
                     return sess["hls_dir"], None
-                # Process died — advance URL index (failover) before restarting
+                # Process died — rotate URL for failover
                 _, urls = self._get_active_url(stream)
                 self._url_idx[sid] = (self._url_idx.get(sid, 0) + 1) % len(urls)
                 logger.info("Stream %s: process died, rotating to URL index %d/%d",
@@ -309,20 +389,196 @@ class HLSManager:
                 logger.error("HLS start failed for %s: %s", sid, exc)
                 return hls_dir, str(exc)
 
+            now = asyncio.get_event_loop().time()
+            sess["stream"]     = stream
+            sess["started_at"] = now
+            sess["last_touch"] = now
             self._sessions[sid] = sess
             return hls_dir, None
 
     def touch(self, stream_id: str):
-        """Update last_touch to prevent cleanup."""
         sess = self._sessions.get(stream_id)
         if sess:
             sess["last_touch"] = asyncio.get_event_loop().time()
+
+    async def get_stats(self, stream_id: str) -> dict:
+        """Return latest ffmpeg stats for a stream."""
+        sid      = _safe_id(stream_id)
+        prog     = f"/tmp/ffmpeg_progress_{sid}.txt"
+        data     = _parse_progress_file(prog)
+        if not data:
+            data = _parse_stats_from_log(f"/tmp/ffmpeg_{sid}.log")
+
+        sess     = self._sessions.get(stream_id)
+        running  = sess is not None and sess["proc"].returncode is None
+        started  = sess["started_at"] if sess else None
+        uptime   = int(asyncio.get_event_loop().time() - started) if started else 0
+
+        fps     = data.get("fps",     data.get("fps", "0"))
+        bitrate = data.get("bitrate", "")
+        frame   = data.get("frame",   data.get("frame", "0"))
+        speed   = data.get("speed",   "")
+
+        # Parse bitrate from progress file (format: "12345.6kbits/s" or "12345.6")
+        bitrate_kbps = 0.0
+        if bitrate:
+            m = re.search(r"([\d.]+)", bitrate)
+            if m:
+                val = float(m.group(1))
+                bitrate_kbps = val if val < 100000 else val / 1000  # handle bps vs kbps
+
+        return {
+            "running":      running,
+            "uptime_s":     uptime,
+            "fps":          fps,
+            "bitrate_kbps": round(bitrate_kbps, 1),
+            "frame":        frame,
+            "speed":        speed,
+        }
+
+    # ── Recording ────────────────────────────────────────────────────────────
+
+    async def start_recording(self, stream_id: str) -> tuple[str, Optional[str]]:
+        """Start recording the HLS stream to an .mp4 file."""
+        if stream_id in self._recordings:
+            rec = self._recordings[stream_id]
+            if rec["proc"].returncode is None:
+                return rec["path"], None  # already recording
+
+        os.makedirs(RECORDINGS_BASE, exist_ok=True)
+        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        sid  = _safe_id(stream_id)
+        path = os.path.join(RECORDINGS_BASE, f"{sid}_{ts}.mp4")
+
+        # Read from HLS output directory
+        hls_dir  = os.path.join(HLS_BASE, stream_id)
+        playlist = os.path.join(hls_dir, "stream.m3u8")
+        if not os.path.exists(playlist):
+            return "", "Stream não está rodando"
+
+        ff_args = [
+            FFMPEG, "-hide_banner", "-y",
+            "-i", playlist,
+            "-c", "copy",
+            "-movflags", "+faststart",
+            path,
+        ]
+        log  = open(f"/tmp/ffmpeg_rec_{sid}.log", "wb")
+        proc = await asyncio.create_subprocess_exec(
+            *ff_args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=log,
+        )
+        self._recordings[stream_id] = {
+            "proc":       proc,
+            "path":       path,
+            "log":        log,
+            "started_at": datetime.now().isoformat(),
+        }
+        logger.info("Recording started for %s → %s", stream_id, path)
+        return path, None
+
+    async def stop_recording(self, stream_id: str) -> Optional[str]:
+        """Stop recording; returns the output file path."""
+        rec = self._recordings.pop(stream_id, None)
+        if not rec:
+            return None
+        proc = rec["proc"]
+        if proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                proc.kill()
+        try:
+            rec["log"].close()
+        except Exception:
+            pass
+        logger.info("Recording stopped for %s → %s", stream_id, rec["path"])
+        return rec["path"]
+
+    def get_recording_status(self, stream_id: str) -> Optional[dict]:
+        rec = self._recordings.get(stream_id)
+        if not rec:
+            return None
+        running = rec["proc"].returncode is None
+        size    = 0
+        try:
+            size = os.path.getsize(rec["path"])
+        except Exception:
+            pass
+        return {
+            "recording":  running,
+            "path":       rec["path"],
+            "filename":   os.path.basename(rec["path"]),
+            "started_at": rec["started_at"],
+            "size_bytes": size,
+        }
+
+    @staticmethod
+    def list_recordings(stream_id: Optional[str] = None) -> list[dict]:
+        sid     = _safe_id(stream_id) if stream_id else None
+        pattern = os.path.join(RECORDINGS_BASE, f"{sid}_*.mp4" if sid else "*.mp4")
+        files   = []
+        for path in sorted(glob.glob(pattern), reverse=True):
+            try:
+                stat = os.stat(path)
+                files.append({
+                    "filename":     os.path.basename(path),
+                    "path":         path,
+                    "size_bytes":   stat.st_size,
+                    "created_at":   datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    "stream_id":    os.path.basename(path).rsplit("_", 2)[0] if sid is None else stream_id,
+                })
+            except Exception:
+                pass
+        return files
+
+    # ── Thumbnails ───────────────────────────────────────────────────────────
+
+    async def capture_thumbnail(self, stream_id: str) -> Optional[str]:
+        """Capture a JPEG thumbnail from the latest HLS segment."""
+        sid     = _safe_id(stream_id)
+        hls_dir = os.path.join(HLS_BASE, stream_id)
+        os.makedirs(THUMBNAILS_BASE, exist_ok=True)
+        out_path = os.path.join(THUMBNAILS_BASE, f"{sid}.jpg")
+
+        # Find latest segment
+        segs = sorted(glob.glob(os.path.join(hls_dir, "seg*.ts")))
+        # For multi-quality, check subdirs too
+        if not segs:
+            for q in ("720p", "1080p", "480p", "360p"):
+                segs = sorted(glob.glob(os.path.join(hls_dir, q, "seg*.ts")))
+                if segs:
+                    break
+        if not segs:
+            return None
+
+        seg = segs[-1]
+
+        def _run():
+            import subprocess as _sp
+            try:
+                result = _sp.run([
+                    FFMPEG, "-hide_banner", "-y",
+                    "-i", seg,
+                    "-vframes", "1",
+                    "-q:v", "3",
+                    "-vf", "scale=320:-2",
+                    out_path,
+                ], capture_output=True, timeout=10)
+                return out_path if result.returncode == 0 and os.path.exists(out_path) else None
+            except Exception:
+                return None
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _run)
 
     # ── Startup cleanup ──────────────────────────────────────────────────────
 
     @staticmethod
     def startup_cleanup():
-        """Kill orphan processes and clear temp dirs on server start."""
         import subprocess as sp
         for cmd in [
             ["pkill", "-9", "-f", HLS_BASE],
@@ -342,7 +598,7 @@ class HLSManager:
     # ── CENC pipeline: n_m3u8dl → FIFO → ffmpeg ──────────────────────────────
 
     async def _start_cenc_session(self, stream, hls_dir: str, url: str) -> dict:
-        sid     = _safe_id(stream.id)
+        sid = _safe_id(stream.id)
         os.makedirs(PIPE_BASE, exist_ok=True)
 
         fifo_path = os.path.join(PIPE_BASE, f"{sid}.ts")
@@ -354,10 +610,8 @@ class HLSManager:
         shutil.rmtree(tmp_cwd, ignore_errors=True)
         os.makedirs(tmp_cwd, exist_ok=True)
 
-        clean_url = url.split("#")[0]   # use the rotated URL
-
-        # Build --key args: support multi-key CDM format (drm_keys) and legacy single key
-        key_pairs = []
+        clean_url  = url.split("#")[0]
+        key_pairs  = []
         if stream.drm_keys:
             for line in stream.drm_keys.splitlines():
                 line = line.strip()
@@ -386,12 +640,12 @@ class HLSManager:
             "--decryption-binary-path", MP4DECRYPT,
             "--live-real-time-merge",
             "--live-pipe-mux",
-            "--ffmpeg-binary-path", FFMPEG,
-            "--save-dir", PIPE_BASE,
-            "--save-name", sid,
+            "--ffmpeg-binary-path",   FFMPEG,
+            "--save-dir",             PIPE_BASE,
+            "--save-name",            sid,
         ]
 
-        n_log = open(f"/tmp/n_m3u8dl_{sid}.log", "ab")
+        n_log  = open(f"/tmp/n_m3u8dl_{sid}.log", "ab")
         n_proc = await asyncio.create_subprocess_exec(
             *n_args,
             cwd=tmp_cwd,
@@ -400,19 +654,20 @@ class HLSManager:
             stderr=n_log,
         )
 
-        # ffmpeg must open FIFO BEFORE n_m3u8dl writes to it
         playlist = os.path.join(hls_dir, "stream.m3u8")
+        prog_path = f"/tmp/ffmpeg_progress_{sid}.txt"
         ff_args  = [
             FFMPEG, "-hide_banner",
-            "-fflags", "+genpts+discardcorrupt",
+            "-fflags",    "+genpts+discardcorrupt",
             "-err_detect", "ignore_err",
             "-i", fifo_path,
             "-map", "0:v:0?", "-map", f"0:a:{stream.audio_track}?",
             "-c:v", "copy", "-c:a", "copy",
+            "-progress", prog_path,
             "-f", "hls",
-            "-hls_time",         str(stream.hls_time),
-            "-hls_list_size",    str(stream.hls_list_size),
-            "-hls_flags",        "delete_segments",
+            "-hls_time",             str(stream.hls_time),
+            "-hls_list_size",        str(stream.hls_list_size),
+            "-hls_flags",            "delete_segments",
             "-hls_segment_filename", os.path.join(hls_dir, "seg%05d.ts"),
             playlist,
         ]
@@ -431,7 +686,7 @@ class HLSManager:
             "fifo_path":  fifo_path,
             "ff_log":     ff_log,
             "extra_log":  n_log,
-            "last_touch": asyncio.get_event_loop().time(),
+            "prog_path":  prog_path,
         }
 
     # ── HTTP pipeline: ffmpeg direct ─────────────────────────────────────────
@@ -440,19 +695,15 @@ class HLSManager:
         sid      = _safe_id(stream.id)
         playlist = os.path.join(hls_dir, "stream.m3u8")
 
-        # Multi-quality ABR mode
         qualities = [q.strip() for q in (stream.output_qualities or "").split(",") if q.strip()]
         if qualities:
             ff_args = _build_ffmpeg_multi_quality_args(stream, hls_dir, url, qualities)
         else:
-            # Single-quality mode
             active_url = url
-            target_h = _height_from_resolution(stream.video_resolution)
+            target_h   = _height_from_resolution(stream.video_resolution)
 
-            # YouTube URLs: use yt-dlp to extract direct stream URL
             if _YT_RE.search(url):
                 active_url = await _resolve_youtube_url(url, target_h or 720)
-            # For copy mode + explicit resolution: resolve the best HLS variant URL first
             elif stream.video_codec == "copy" and target_h:
                 active_url = await _resolve_hls_variant(url, target_h)
 
@@ -461,12 +712,11 @@ class HLSManager:
 
             ff_args = [
                 ff_bin, "-hide_banner",
-                "-fflags",      "+genpts+discardcorrupt+igndts",
-                "-err_detect",  "ignore_err",
+                "-fflags",          "+genpts+discardcorrupt+igndts",
+                "-err_detect",      "ignore_err",
                 "-analyzeduration", "3000000",
                 "-probesize",       "5000000",
             ]
-            # reconnect flags only for HLS/HTTP streams, not yt-dlp direct URLs
             if not is_yt:
                 ff_args += [
                     "-reconnect",            "1",
@@ -482,6 +732,13 @@ class HLSManager:
             ff_args += _build_ffmpeg_video_args(stream)
             ff_args += _build_ffmpeg_audio_args(stream)
 
+        prog_path = f"/tmp/ffmpeg_progress_{sid}.txt"
+
+        if qualities:
+            # multi-quality: ff_args already complete — inject -progress before output
+            # Find the last positional arg (the output pattern) and inject before it
+            ff_args = ff_args[:-1] + ["-progress", prog_path] + [ff_args[-1]]
+        else:
             hls_out = (
                 f"[f=hls:hls_time={stream.hls_time}:hls_list_size={stream.hls_list_size}"
                 f":hls_flags=delete_segments"
@@ -494,18 +751,19 @@ class HLSManager:
                 extra_outputs.append(f"[f=mpegts]{stream.output_udp}")
 
             if extra_outputs:
-                ff_args += ["-f", "tee", "|".join([hls_out] + extra_outputs)]
+                ff_args += ["-progress", prog_path,
+                            "-f", "tee", "|".join([hls_out] + extra_outputs)]
             else:
                 ff_args += [
-                    "-f", "hls",
-                    "-hls_time",         str(stream.hls_time),
-                    "-hls_list_size",    str(stream.hls_list_size),
-                    "-hls_flags",        "delete_segments",
+                    "-progress",             prog_path,
+                    "-f",                    "hls",
+                    "-hls_time",             str(stream.hls_time),
+                    "-hls_list_size",        str(stream.hls_list_size),
+                    "-hls_flags",            "delete_segments",
                     "-hls_segment_filename", os.path.join(hls_dir, "seg%05d.ts"),
                     playlist,
                 ]
 
-        # Build env: inject proxy vars (works for all protocols via ffmpeg's libavformat)
         env = os.environ.copy()
         if stream.proxy:
             for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
@@ -527,7 +785,7 @@ class HLSManager:
             "fifo_path":  None,
             "ff_log":     ff_log,
             "extra_log":  None,
-            "last_touch": asyncio.get_event_loop().time(),
+            "prog_path":  prog_path,
         }
 
     # ── Session kill ─────────────────────────────────────────────────────────
@@ -568,6 +826,63 @@ class HLSManager:
                 logger.info("HLS cleanup: idle session %s", sid)
                 async with self._lock:
                     await self._kill_session(sid)
+
+    # ── Watchdog (auto-restart) ───────────────────────────────────────────────
+
+    async def _watchdog_loop(self):
+        while True:
+            await asyncio.sleep(WATCHDOG_INTERVAL)
+            now = asyncio.get_event_loop().time()
+
+            # Reset restart count for streams running stably
+            for sid, sess in list(self._sessions.items()):
+                if sess["proc"].returncode is None:
+                    started = sess.get("started_at", now)
+                    if (now - started > STABLE_RUN_S
+                            and self._restart_counts.get(sid, 0) > 0):
+                        logger.info("Stream %s: stable for %ds — reset restart count", sid, STABLE_RUN_S)
+                        self._restart_counts[sid] = 0
+
+            # Find dead sessions that need restarting
+            to_restart = []
+            for sid, sess in list(self._sessions.items()):
+                if sess["proc"].returncode is None:
+                    continue                            # still running
+                last_touch = sess.get("last_touch", 0)
+                if now - last_touch > 120:
+                    continue                            # idle — cleanup will handle it
+                count = self._restart_counts.get(sid, 0)
+                if count >= MAX_RESTARTS:
+                    if count == MAX_RESTARTS:           # log once
+                        logger.warning("Stream %s: max restarts (%d) reached, giving up", sid, MAX_RESTARTS)
+                        self._restart_counts[sid] = MAX_RESTARTS + 1  # mark as logged
+                    continue
+                last_restart = self._last_restart.get(sid, 0)
+                if now - last_restart < RESTART_DELAY_S:
+                    continue                            # too soon
+                stream = sess.get("stream")
+                if stream:
+                    to_restart.append((sid, stream, count))
+
+            for sid, stream, count in to_restart:
+                logger.info("Watchdog: restarting stream %s (attempt %d/%d)",
+                            sid, count + 1, MAX_RESTARTS)
+                self._restart_counts[sid] = count + 1
+                self._last_restart[sid]   = now
+                try:
+                    await self.get_hls_dir(stream)
+                    logger.info("Watchdog: stream %s restarted OK", sid)
+                    asyncio.create_task(_send_telegram(
+                        f"🔄 <b>aistra-stream</b>\n"
+                        f"Stream <code>{sid}</code> reiniciado automaticamente "
+                        f"(tentativa {count+1}/{MAX_RESTARTS})"
+                    ))
+                except Exception as exc:
+                    logger.error("Watchdog: restart failed for %s: %s", sid, exc)
+                    asyncio.create_task(_send_telegram(
+                        f"❌ <b>aistra-stream</b>\n"
+                        f"Falha ao reiniciar stream <code>{sid}</code>: {exc}"
+                    ))
 
 
 # Singleton

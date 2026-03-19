@@ -13,7 +13,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -365,6 +365,130 @@ async def stream_hls_files(
         return FileResponse(filepath, media_type="video/mp2t", headers={"Cache-Control": "no-cache"})
     except FileNotFoundError:
         return Response(content="Segmento não encontrado", status_code=404)
+
+
+# ── Stats, live log, recording, thumbnail ────────────────────────────────────
+
+@app.get("/api/streams/{stream_id}/stats")
+async def api_stream_stats(
+    stream_id: str,
+    _=Depends(get_current_user),
+):
+    """Return real-time ffmpeg stats (bitrate, fps, uptime)."""
+    return await hls_manager.get_stats(stream_id)
+
+
+@app.get("/api/streams/{stream_id}/log/live")
+async def api_stream_log_live(
+    stream_id: str,
+    _=Depends(require_operator),
+):
+    """Server-Sent Events: tail the ffmpeg log file in real-time."""
+    safe     = re.sub(r"[^a-zA-Z0-9_-]", "_", stream_id)
+    log_path = f"/tmp/ffmpeg_{safe}.log"
+
+    async def _generator():
+        pos = 0
+        if os.path.exists(log_path):
+            with open(log_path, "rb") as f:
+                raw  = f.read()
+                pos  = len(raw)
+                text = raw.decode("utf-8", errors="replace")
+            for line in text.splitlines()[-40:]:
+                yield f"data: {line}\n\n"
+        yield "data: --- live ---\n\n"
+        while True:
+            await asyncio.sleep(0.5)
+            if not os.path.exists(log_path):
+                continue
+            with open(log_path, "rb") as f:
+                f.seek(pos)
+                chunk = f.read()
+                pos   = f.tell()
+            if chunk:
+                for line in chunk.decode("utf-8", errors="replace").splitlines():
+                    yield f"data: {line}\n\n"
+
+    return StreamingResponse(
+        _generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/streams/{stream_id}/record")
+async def api_start_recording(
+    stream_id: str,
+    _=Depends(require_operator),
+):
+    path, err = await hls_manager.start_recording(stream_id)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    return {"recording": True, "filename": os.path.basename(path)}
+
+
+@app.delete("/api/streams/{stream_id}/record", status_code=200)
+async def api_stop_recording(
+    stream_id: str,
+    _=Depends(require_operator),
+):
+    path = await hls_manager.stop_recording(stream_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Gravação não iniciada")
+    return {"recording": False, "filename": os.path.basename(path)}
+
+
+@app.get("/api/streams/{stream_id}/record/status")
+async def api_recording_status(
+    stream_id: str,
+    _=Depends(get_current_user),
+):
+    status = hls_manager.get_recording_status(stream_id)
+    return status or {"recording": False}
+
+
+@app.get("/api/recordings")
+async def api_list_recordings(
+    stream_id: str = "",
+    _=Depends(require_operator),
+):
+    return hls_manager.list_recordings(stream_id or None)
+
+
+@app.get("/api/recordings/{filename}")
+async def api_download_recording(
+    filename: str,
+    _=Depends(require_operator),
+):
+    if re.search(r"[^a-zA-Z0-9_\-.]", filename) or ".." in filename:
+        raise HTTPException(status_code=400, detail="Nome inválido")
+    from backend.hls_manager import RECORDINGS_BASE
+    path = os.path.join(RECORDINGS_BASE, filename)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+    return FileResponse(path, media_type="video/mp4",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.get("/api/streams/{stream_id}/thumbnail")
+async def api_stream_thumbnail(
+    stream_id: str,
+    _=Depends(get_current_user),
+):
+    """Capture and return the latest thumbnail (JPEG) for a stream."""
+    from backend.hls_manager import THUMBNAILS_BASE
+    sid        = re.sub(r"[^a-zA-Z0-9_-]", "_", stream_id)
+    thumb_path = os.path.join(THUMBNAILS_BASE, f"{sid}.jpg")
+
+    if os.path.exists(thumb_path) and time.time() - os.path.getmtime(thumb_path) < 10:
+        return FileResponse(thumb_path, media_type="image/jpeg",
+                            headers={"Cache-Control": "no-cache"})
+
+    path = await hls_manager.capture_thumbnail(stream_id)
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Thumbnail não disponível")
+    return FileResponse(path, media_type="image/jpeg",
+                        headers={"Cache-Control": "no-cache"})
 
 
 # ── Stream player config ──────────────────────────────────────────────────────

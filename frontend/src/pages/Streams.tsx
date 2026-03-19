@@ -261,10 +261,17 @@ function StreamModal({ stream, onSave, onClose }: {
   stream: Partial<Stream> | null; onSave: () => void; onClose: () => void
 }) {
   const isNew = !stream?.id
-  const [tab, setTab]       = useState<'source'|'video'|'audio'|'hls'>('source')
-  const [form, setForm]     = useState<any>(stream ? { ...BLANK, ...stream } : { ...BLANK })
-  const [saving, setSaving] = useState(false)
-  const [error, setError]   = useState('')
+  const [tab, setTab]         = useState<'source'|'video'|'audio'|'hls'>('source')
+  const [form, setForm]       = useState<any>(stream ? { ...BLANK, ...stream } : { ...BLANK })
+  const [saving, setSaving]   = useState(false)
+  const [error, setError]     = useState('')
+  const [categories, setCategories] = useState<string[]>([])
+
+  useEffect(() => {
+    api.get('/api/categories')
+      .then((r: any) => setCategories((r.data as any[]).map((c: any) => c.name)))
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -340,8 +347,11 @@ function StreamModal({ stream, onSave, onClose }: {
               </div>
             </div>
             <Row label="Nome"><input value={form.name} onChange={e => set('name', e.target.value)} placeholder="Globo HD" /></Row>
-            <Row label="Categoria" hint="Agrupa os streams por categoria (ex: Esportes, Notícias, Filmes)">
-              <input value={form.category ?? ''} onChange={e => set('category', e.target.value)} placeholder="Ex: Esportes" />
+            <Row label="Categoria" hint="Selecione a categoria do stream">
+              <select value={form.category ?? ''} onChange={e => set('category', e.target.value)}>
+                <option value="">— Sem categoria —</option>
+                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
             </Row>
             <Row label="URL" hint="HLS (.m3u8), MPEG-TS, YouTube, CENC/CMAF">
               <textarea

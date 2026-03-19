@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import Hls from 'hls.js'
 import {
   FiPlay, FiSquare, FiEdit2, FiTrash2, FiPlus, FiX, FiRefreshCw,
@@ -624,10 +625,16 @@ export default function Streams() {
   const [recording, setRecording]     = useState<Record<string, boolean>>({})
   const [stats, setStats]             = useState<Record<string, StreamStats>>({})
   const [thumbnails, setThumbnails]   = useState<Record<string, string>>({})
+  const [searchParams, setSearchParams]   = useSearchParams()
   const [search, setSearch]               = useState('')
-  const [activeCategory, setActiveCategory] = useState<string | null>(null)
   const [m3uError, setM3uError]           = useState('')
   const [catMeta, setCatMeta]             = useState<Category[]>([])
+
+  const activeCategory = searchParams.get('cat')
+  function setActiveCategory(cat: string | null) {
+    if (cat) setSearchParams({ cat }, { replace: true })
+    else setSearchParams({}, { replace: true })
+  }
 
   const user    = JSON.parse(localStorage.getItem('user') || '{}')
   const canEdit = user.role === 'admin' || user.role === 'operator'

@@ -2,22 +2,41 @@ import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { FiGrid, FiVideo, FiUsers, FiLogOut, FiRadio, FiSettings, FiChevronRight, FiTag } from 'react-icons/fi'
 
+interface Category { id: number; name: string; logo_path: string | null }
+
 export default function Layout() {
   const nav      = useNavigate()
   const location = useLocation()
   const user     = JSON.parse(localStorage.getItem('user') || '{}')
-  const [open, setOpen]           = useState(false)
-  const [configOpen, setConfigOpen] = useState(
+  const [open, setOpen]               = useState(false)
+  const [configOpen, setConfigOpen]   = useState(
     () => ['/settings', '/users', '/categories'].some(p => location.pathname.startsWith(p))
   )
+  const [streamsOpen, setStreamsOpen] = useState(
+    () => location.pathname.startsWith('/streams')
+  )
+  const [cats, setCats] = useState<Category[]>([])
+
+  // Fetch categories for sidebar sub-menu (re-fetch on route change)
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    if (!token) return
+    fetch('/api/categories', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then(setCats)
+      .catch(() => {})
+  }, [location.pathname])
 
   // Close sidebar on navigation (mobile)
   useEffect(() => { setOpen(false) }, [location.pathname])
 
-  // Auto-expand config sub-menu when navigating to a child route
+  // Auto-expand sub-menus when navigating to child routes
   useEffect(() => {
     if (['/settings', '/users', '/categories'].some(p => location.pathname.startsWith(p))) {
       setConfigOpen(true)
+    }
+    if (location.pathname.startsWith('/streams')) {
+      setStreamsOpen(true)
     }
   }, [location.pathname])
 
@@ -35,6 +54,10 @@ export default function Layout() {
 
   const initials = (user.username || 'U').charAt(0).toUpperCase()
 
+  // Helpers for active state with search params
+  const searchParams = new URLSearchParams(location.search)
+  const activeCat    = searchParams.get('cat')
+
   return (
     <div className="layout">
       {/* Backdrop overlay — closes sidebar on mobile */}
@@ -49,9 +72,49 @@ export default function Layout() {
           <NavLink to="/dashboard" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
             <FiGrid size={16} /> Dashboard
           </NavLink>
-          <NavLink to="/streams" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
-            <FiVideo size={16} /> Streams
-          </NavLink>
+
+          {/* Streams — collapsible with category sub-items */}
+          <div>
+            <div
+              className={`nav-group-header${streamsOpen ? ' open' : ''}`}
+              onClick={() => setStreamsOpen(o => !o)}
+            >
+              <span className="nav-group-header-left">
+                <FiVideo size={16} /> Streams
+              </span>
+              <FiChevronRight size={12} className={`nav-group-chevron${streamsOpen ? ' open' : ''}`} />
+            </div>
+            <div className={`nav-sub${streamsOpen ? ' open' : ''}`}>
+              {/* "All streams" — active only when on /streams without ?cat= */}
+              <div
+                className={`nav-item${location.pathname === '/streams' && !activeCat ? ' active' : ''}`}
+                onClick={() => nav('/streams')}
+                style={{ cursor: 'pointer' }}
+              >
+                Todos os Streams
+              </div>
+              {cats.map(cat => (
+                <div
+                  key={cat.id}
+                  className={`nav-item${activeCat === cat.name ? ' active' : ''}`}
+                  onClick={() => nav(`/streams?cat=${encodeURIComponent(cat.name)}`)}
+                  style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  {cat.logo_path ? (
+                    <img
+                      src={`/api/categories/${cat.id}/logo?t=${cat.logo_path}`}
+                      alt=""
+                      style={{ width: 14, height: 14, objectFit: 'contain', borderRadius: 2, flexShrink: 0 }}
+                    />
+                  ) : (
+                    <FiTag size={12} style={{ flexShrink: 0, color: 'var(--text3)' }} />
+                  )}
+                  {cat.name}
+                </div>
+              ))}
+            </div>
+          </div>
+
           {user.role === 'admin' && (
             <div>
               <div

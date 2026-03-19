@@ -26,10 +26,6 @@ interface Stream {
   created_at: string; updated_at: string
 }
 
-interface Category {
-  id: number; name: string; logo_path: string | null
-}
-
 interface StreamStats {
   running: boolean; uptime_s: number
   fps: string; bitrate_kbps: number; frame: string; speed: string
@@ -628,13 +624,8 @@ export default function Streams() {
   const [searchParams, setSearchParams]   = useSearchParams()
   const [search, setSearch]               = useState('')
   const [m3uError, setM3uError]           = useState('')
-  const [catMeta, setCatMeta]             = useState<Category[]>([])
 
   const activeCategory = searchParams.get('cat')
-  function setActiveCategory(cat: string | null) {
-    if (cat) setSearchParams({ cat }, { replace: true })
-    else setSearchParams({}, { replace: true })
-  }
 
   const user    = JSON.parse(localStorage.getItem('user') || '{}')
   const canEdit = user.role === 'admin' || user.role === 'operator'
@@ -652,11 +643,6 @@ export default function Streams() {
 
   useEffect(() => { load() }, [load])
   useEffect(() => { const t = setInterval(load, 10000); return () => clearInterval(t) }, [load])
-
-  // Load category metadata (logos) once
-  useEffect(() => {
-    api.get('/api/categories').then(r => setCatMeta(r.data)).catch(() => {})
-  }, [])
 
   // When streams list changes, load thumbnails + recording status for running streams immediately
   useEffect(() => {
@@ -745,8 +731,7 @@ export default function Streams() {
     }
   }
 
-  // Derived: categories list + filtered streams
-  const categories = Array.from(new Set(streams.map(s => s.category || '').filter(Boolean))).sort()
+  // Derived: filtered streams
   const filteredStreams = streams.filter(s => {
     const matchSearch   = !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.id.toLowerCase().includes(search.toLowerCase())
     const matchCategory = !activeCategory || (s.category || '') === activeCategory
@@ -819,52 +804,15 @@ export default function Streams() {
         </div>
       </div>
 
-      {/* Search + Categories */}
+      {/* Search */}
       <div style={{ marginBottom:12 }}>
-        <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom: categories.length > 0 ? 8 : 0 }}>
-          <input
-            type="search"
-            placeholder="Buscar stream por nome ou ID…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            style={{ flex:1, minWidth:200, maxWidth:380 }}
-          />
-        </div>
-        {/* Category tabs — always show row so user knows the feature exists */}
-        <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
-          <button
-            className={`btn btn-sm${!activeCategory ? ' btn-primary' : ' btn-ghost'}`}
-            onClick={() => setActiveCategory(null)}
-            style={{ fontSize:12 }}
-          >
-            Todas ({streams.length})
-          </button>
-          {categories.map(cat => {
-            const meta = catMeta.find(c => c.name === cat)
-            return (
-              <button
-                key={cat}
-                className={`btn btn-sm${activeCategory === cat ? ' btn-primary' : ' btn-ghost'}`}
-                onClick={() => setActiveCategory(activeCategory === cat ? null : cat)}
-                style={{ fontSize:12, display:'flex', alignItems:'center', gap:5 }}
-              >
-                {meta?.logo_path && (
-                  <img
-                    src={`/api/categories/${meta.id}/logo?t=${meta.logo_path}`}
-                    alt=""
-                    style={{ width:16, height:16, objectFit:'contain', borderRadius:2 }}
-                  />
-                )}
-                {cat} ({streams.filter(s => s.category === cat).length})
-              </button>
-            )
-          })}
-          {canEdit && categories.length === 0 && streams.length > 0 && (
-            <span style={{ fontSize:11, color:'var(--text3)', fontStyle:'italic' }}>
-              Edite um stream e defina uma Categoria para filtrar aqui
-            </span>
-          )}
-        </div>
+        <input
+          type="search"
+          placeholder="Buscar stream por nome ou ID…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ maxWidth:380 }}
+        />
       </div>
 
       <div className="page-content">

@@ -4,7 +4,7 @@ import Hls from 'hls.js'
 import {
   FiPlay, FiSquare, FiEdit2, FiTrash2, FiPlus, FiX, FiRefreshCw,
   FiExternalLink, FiVideo, FiAlertCircle, FiTerminal, FiCircle,
-  FiDownload, FiImage,
+  FiDownload, FiImage, FiSlash,
 } from 'react-icons/fi'
 import api, { getHlsUrl } from '../api'
 
@@ -30,6 +30,7 @@ interface StreamStats {
   running: boolean; uptime_s: number
   fps: string; bitrate_kbps: number; frame: string; speed: string
   drop_frames: number; dup_frames: number; total_size_mb: number
+  ban_detected: boolean; ban_http_code: number; ban_count: number; ban_at: number | null
 }
 
 const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
@@ -781,6 +782,13 @@ export default function Streams() {
     }
   }
 
+  async function clearBan(id: string) {
+    try {
+      await api.post(`/api/streams/${id}/ban/clear`)
+      load()
+    } catch { /* ignore */ }
+  }
+
   // Derived: filtered streams
   const filteredStreams = streams.filter(s => {
     const matchSearch   = !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.id.toLowerCase().includes(search.toLowerCase())
@@ -1005,6 +1013,16 @@ export default function Streams() {
                         )}
                       </div>
                       <StatsLine id={s.id} streamRunning={s.status === 'running'} />
+                      {stats[s.id]?.ban_detected && (
+                        <div style={{ marginTop:3, fontSize:10, color:'var(--danger)', display:'flex', alignItems:'center', gap:4 }}>
+                          <FiSlash size={10} />
+                          <span>
+                            IP/conta banida pelo provedor
+                            {stats[s.id].ban_http_code > 0 && ` (HTTP ${stats[s.id].ban_http_code})`}
+                            {stats[s.id].ban_count > 1 && ` · ${stats[s.id].ban_count}×`}
+                          </span>
+                        </div>
+                      )}
                     </td>
                     <td><StatusBadge status={s.status} /></td>
                     <td>
@@ -1018,6 +1036,14 @@ export default function Streams() {
                           <Tip text="Parar o processamento deste stream (libera recursos do servidor)">
                             <button className="btn btn-ghost btn-sm" onClick={() => stopStream(s.id)}>
                               <FiSquare size={12} />
+                            </button>
+                          </Tip>
+                        )}
+                        {stats[s.id]?.ban_detected && canEdit && (
+                          <Tip text="Limpar aviso de ban e reiniciar o stream">
+                            <button className="btn btn-danger btn-sm" onClick={() => clearBan(s.id)}
+                              style={{ fontSize:10, padding:'2px 7px' }}>
+                              <FiSlash size={11} /> Limpar ban
                             </button>
                           </Tip>
                         )}

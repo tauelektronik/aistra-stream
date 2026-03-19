@@ -887,8 +887,33 @@ async def api_stream_stats(
     stream_id: str,
     _=Depends(get_current_user),
 ):
-    """Return real-time ffmpeg stats (bitrate, fps, uptime)."""
+    """Return real-time ffmpeg stats (bitrate, fps, uptime, ban status)."""
     return await hls_manager.get_stats(stream_id)
+
+
+@app.get("/api/streams/{stream_id}/ban")
+async def api_stream_ban_status(
+    stream_id: str,
+    _=Depends(get_current_user),
+):
+    """Return ban status for a stream."""
+    return hls_manager.get_ban_status(stream_id)
+
+
+@app.post("/api/streams/{stream_id}/ban/clear", status_code=200)
+async def api_stream_ban_clear(
+    stream_id: str,
+    db: AsyncSession = Depends(get_db),
+    actor=Depends(require_operator),
+):
+    """Clear ban state and retry stream from scratch."""
+    s = await get_stream(db, stream_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Stream não encontrado")
+    hls_manager.clear_ban(stream_id)
+    await hls_manager.stop_session(stream_id)
+    audit.info("BAN_CLEAR actor=%s stream=%s", actor.username, stream_id)
+    return {"ok": True, "message": "Ban limpo. Stream será reiniciado na próxima requisição."}
 
 
 @app.get("/api/streams/{stream_id}/log/live")

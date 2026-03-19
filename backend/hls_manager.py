@@ -333,6 +333,44 @@ def _parse_stats_from_log(path: str) -> dict:
 
 # ── HLSManager ────────────────────────────────────────────────────────────────
 
+# ── Ban detection patterns ────────────────────────────────────────────────────
+# Matched against last lines of ffmpeg / n_m3u8dl logs after a crash.
+_BAN_PATTERNS: list[tuple[re.Pattern, int]] = [
+    (re.compile(r'HTTP error 403|403 Forbidden|403 forbidden',          re.I), 403),
+    (re.compile(r'HTTP error 429|429 Too Many|rate.?limit',             re.I), 429),
+    (re.compile(r'HTTP error 451',                                      re.I), 451),
+    (re.compile(r'HTTP error 407|407 Proxy',                            re.I), 407),
+    (re.compile(r'not authorized|unauthorized|401 Unauthorized',        re.I), 401),
+    (re.compile(r'Access [Dd]enied|access_denied',                      re.I), 403),
+    (re.compile(r'Subscription expired|subscription.*invalid',          re.I), 403),
+    (re.compile(r'\bIP.{0,20}block|block.{0,10}IP\b',                  re.I), 403),
+    (re.compile(r'\bbanned\b',                                          re.I), 403),
+    (re.compile(r'geographic.?block|geo.?block|not available in your',  re.I), 451),
+    (re.compile(r'Invalid token|token.*expired|token.*invalid',         re.I), 401),
+    (re.compile(r'DRM.{0,30}error|license.*denied|key.*not.*found',     re.I), 403),
+]
+_BAN_COOLDOWN_S = int(os.getenv("BAN_COOLDOWN_S", "1800"))  # 30 min before retrying a banned URL
+
+
+def _scan_log_for_ban(log_path: str, tail_lines: int = 80) -> tuple[bool, int]:
+    """Read last `tail_lines` of a log file and return (ban_detected, http_code)."""
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            # Read last ~8KB (enough for 80 lines)
+            f.seek(max(0, size - 8192))
+            chunk = f.read().decode("utf-8", errors="replace")
+        lines = chunk.splitlines()[-tail_lines:]
+        text  = "\n".join(lines)
+        for pattern, code in _BAN_PATTERNS:
+            if pattern.search(text):
+                return True, code
+    except OSError:
+        pass
+    return False, 0
+
+
 class HLSManager:
     def __init__(self):
         self._sessions:        dict = {}   # stream_id → session dict
@@ -340,6 +378,8 @@ class HLSManager:
         self._restart_counts:  dict = {}   # stream_id → consecutive restart count
         self._last_restart:    dict = {}   # stream_id → timestamp of last restart
         self._stall_counts:    dict = {}   # stream_id → consecutive zero-bitrate poll count
+        self._ban_status:      dict = {}   # stream_id → {detected, http_code, url, at, count}
+        self._ban_url_cooldown: dict = {}  # "stream_id:url_idx" → timestamp of ban (per URL)
         self._recordings:      dict = {}   # stream_id → {proc, path, started_at}
         self._starting:        set  = set()  # stream_ids currently being spawned (prevents duplicate starts)
         self._lock            = asyncio.Lock()
@@ -386,6 +426,20 @@ class HLSManager:
         if sess["proc"].returncode is None:
             return "running"
         return "error"
+
+    def get_ban_status(self, stream_id: str) -> dict:
+        """Return ban info for a stream. Empty dict = no ban detected."""
+        return dict(self._ban_status.get(stream_id, {}))
+
+    def clear_ban(self, stream_id: str):
+        """Clear ban state and URL cooldowns for a stream so it can be retried."""
+        self._ban_status.pop(stream_id, None)
+        keys = [k for k in self._ban_url_cooldown if k.startswith(f"{stream_id}:")]
+        for k in keys:
+            self._ban_url_cooldown.pop(k, None)
+        self._url_idx.pop(stream_id, None)   # reset URL rotation
+        self._restart_counts.pop(stream_id, None)
+        logger.info("Ban cleared for stream %s", stream_id)
 
     def _get_active_url(self, stream) -> tuple[str, list]:
         urls = [stream.url.strip()]
@@ -513,6 +567,7 @@ class HLSManager:
                 val = float(m.group(1))
                 bitrate_kbps = val if val < 100000 else val / 1000
 
+        ban = self._ban_status.get(stream_id, {})
         return {
             "running":        running,
             "uptime_s":       uptime,
@@ -523,6 +578,10 @@ class HLSManager:
             "drop_frames":    drop_frames,
             "dup_frames":     dup_frames,
             "total_size_mb":  round(total_size_b / 1024 / 1024, 1) if total_size_b else 0,
+            "ban_detected":   ban.get("detected", False),
+            "ban_http_code":  ban.get("http_code", 0),
+            "ban_count":      ban.get("count", 0),
+            "ban_at":         ban.get("at", None),
         }
 
     # ── Recording ────────────────────────────────────────────────────────────
@@ -1049,25 +1108,101 @@ class HLSManager:
                 last_restart = self._last_restart.get(sid, 0)
                 if now - last_restart < RESTART_DELAY_S:
                     continue   # too soon
+
+                # ── Ban detection: scan logs before deciding restart reason ─
                 if stream:
+                    ssid = _safe_id(sid)
+                    ban_detected, ban_code = False, 0
+                    for log_path in [f"/tmp/ffmpeg_{ssid}.log", f"/tmp/n_m3u8dl_{ssid}.log"]:
+                        detected, code = _scan_log_for_ban(log_path)
+                        if detected:
+                            ban_detected, ban_code = True, code
+                            break
+
+                    if ban_detected:
+                        # Record ban per (stream_id, url_idx) with timestamp
+                        cur_idx  = self._url_idx.get(sid, 0)
+                        ban_key  = f"{sid}:{cur_idx}"
+                        self._ban_url_cooldown[ban_key] = now
+
+                        prev = self._ban_status.get(sid, {})
+                        self._ban_status[sid] = {
+                            "detected":  True,
+                            "http_code": ban_code,
+                            "at":        now,
+                            "count":     prev.get("count", 0) + 1,
+                        }
+                        logger.warning(
+                            "Stream %s: BAN DETECTED (HTTP %d) on URL index %d",
+                            sid, ban_code, cur_idx,
+                        )
+                        # Rotate to next URL immediately, skipping banned ones
+                        _, urls = self._get_active_url(stream)
+                        next_idx = (cur_idx + 1) % len(urls)
+                        # Find first URL not in cooldown
+                        found = False
+                        for i in range(len(urls)):
+                            candidate = (cur_idx + 1 + i) % len(urls)
+                            ckey = f"{sid}:{candidate}"
+                            banned_at = self._ban_url_cooldown.get(ckey, 0)
+                            if now - banned_at > _BAN_COOLDOWN_S:
+                                next_idx = candidate
+                                found = True
+                                break
+                        self._url_idx[sid] = next_idx
+                        reason = "ban"
+                        if not found:
+                            logger.warning("Stream %s: ALL URLs banned — waiting cooldown", sid)
+                            reason = "ban_all"
+                        to_restart.append((sid, stream, count, reason))
+                        continue
+
                     to_restart.append((sid, stream, count, "crash"))
 
             for sid, stream, count, reason in to_restart:
-                reason_label = {"crash": "reiniciado", "stall": "reiniciado (stream travado)",
-                                "yt_refresh": "URL YouTube atualizada"}.get(reason, reason)
+                reason_label = {
+                    "crash":      "reiniciado (crash)",
+                    "stall":      "reiniciado (stream travado)",
+                    "yt_refresh": "URL YouTube atualizada",
+                    "ban":        "reiniciado (URL banida — trocando para backup)",
+                    "ban_all":    "TODAS as URLs banidas — aguardando cooldown",
+                }.get(reason, reason)
+
                 logger.info("Watchdog: %s stream %s (attempt %d/%d)", reason_label, sid, count + 1, MAX_RESTARTS)
-                if reason != "yt_refresh":
+                if reason not in ("yt_refresh", "ban_all"):
                     self._restart_counts[sid] = count + 1
                 self._last_restart[sid]   = now
                 self._stall_counts[sid]   = 0
-                try:
-                    await self.get_hls_dir(stream, force_restart=(reason == "yt_refresh"))
-                    logger.info("Watchdog: stream %s %s OK", sid, reason_label)
+
+                # Skip restart if all URLs are banned (waiting cooldown)
+                if reason == "ban_all":
+                    ban_info = self._ban_status.get(sid, {})
                     asyncio.create_task(_send_telegram(
-                        f"🔄 <b>aistra-stream</b>\n"
-                        f"Stream <code>{sid}</code> {reason_label}"
-                        + (f" (tentativa {count+1}/{MAX_RESTARTS})" if reason == "crash" else "")
+                        f"🚫 <b>aistra-stream — BAN DETECTADO</b>\n"
+                        f"Stream: <code>{sid}</code>\n"
+                        f"HTTP: <b>{ban_info.get('http_code', '?')}</b>\n"
+                        f"Todas as URLs estão banidas.\n"
+                        f"Aguardando cooldown de {_BAN_COOLDOWN_S // 60} min."
                     ))
+                    continue
+
+                try:
+                    await self.get_hls_dir(stream, force_restart=(reason in ("yt_refresh", "ban")))
+                    logger.info("Watchdog: stream %s %s OK", sid, reason_label)
+                    if reason == "ban":
+                        ban_info = self._ban_status.get(sid, {})
+                        asyncio.create_task(_send_telegram(
+                            f"🚫 <b>aistra-stream — BAN DETECTADO</b>\n"
+                            f"Stream: <code>{sid}</code>\n"
+                            f"HTTP: <b>{ban_info.get('http_code', '?')}</b>\n"
+                            f"Trocando para URL backup (tentativa {count+1})."
+                        ))
+                    else:
+                        asyncio.create_task(_send_telegram(
+                            f"🔄 <b>aistra-stream</b>\n"
+                            f"Stream <code>{sid}</code> {reason_label}"
+                            + (f" (tentativa {count+1}/{MAX_RESTARTS})" if reason == "crash" else "")
+                        ))
                 except Exception as exc:
                     logger.error("Watchdog: restart failed for %s: %s", sid, exc)
                     if reason != "yt_refresh":

@@ -595,7 +595,7 @@ async def api_upload_logo(
     # Remove old logo if different extension
     for old in [f for f in os.listdir(LOGOS_BASE) if f.startswith(f"cat_{cat_id}.")]:
         try: os.unlink(os.path.join(LOGOS_BASE, old))
-        except: pass
+        except OSError: pass
 
     path = os.path.join(LOGOS_BASE, filename)
     with open(path, "wb") as f:
@@ -617,7 +617,7 @@ async def api_delete_logo(
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
     if cat.logo_path:
         try: os.unlink(os.path.join(LOGOS_BASE, cat.logo_path))
-        except: pass
+        except OSError: pass
         cat.logo_path = None
         await db.commit()
 

@@ -128,26 +128,24 @@ async def delete_category(db: AsyncSession, cat_id: int) -> bool:
     cat = await get_category(db, cat_id)
     if not cat:
         return False
-    # Unassign streams that belong to this category
-    result = await db.execute(select(Stream).where(Stream.category == cat.name))
-    for stream in result.scalars().all():
-        stream.category = None
+    # Batch-unassign streams that belong to this category
+    await db.execute(update(Stream).where(Stream.category == cat.name).values(category=None))
     await db.delete(cat)
     await db.commit()
     return True
 
 async def assign_streams_to_category(db: AsyncSession, cat_name: str, stream_ids: List[str]) -> int:
     """Set category=cat_name for given stream_ids, clear for others in that category."""
-    # Clear existing assignments for this category
-    result = await db.execute(select(Stream).where(Stream.category == cat_name))
-    for s in result.scalars().all():
-        if s.id not in stream_ids:
-            s.category = None
-    # Assign new ones
-    for sid in stream_ids:
-        result2 = await db.execute(select(Stream).where(Stream.id == sid))
-        s = result2.scalar_one_or_none()
-        if s:
-            s.category = cat_name
+    # Batch-clear old assignments for this category that are not in the new list
+    await db.execute(
+        update(Stream)
+        .where(Stream.category == cat_name, Stream.id.not_in(stream_ids) if stream_ids else Stream.id.isnot(None))
+        .values(category=None)
+    )
+    # Batch-assign new ones
+    if stream_ids:
+        await db.execute(
+            update(Stream).where(Stream.id.in_(stream_ids)).values(category=cat_name)
+        )
     await db.commit()
     return len(stream_ids)

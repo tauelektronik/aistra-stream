@@ -99,9 +99,9 @@ def _validate_drm_keys(v: Optional[str]) -> Optional[str]:
         key = key.strip().replace(" ", "")
         # Zeros are valid (placeholder keys)
         if len(kid) not in (32, 64) or not _HEX_RE.match(kid):
-            raise ValueError(f"KID inválido: '{kid[:32]}'. Deve ter 32 hex chars")
+            raise ValueError(f"KID inválido: '{kid[:32]}'. Deve ter 32 ou 64 caracteres hex")
         if len(key) not in (32, 64) or not _HEX_RE.match(key):
-            raise ValueError(f"KEY inválida: '{key[:32]}'. Deve ter 32 hex chars")
+            raise ValueError(f"KEY inválida: '{key[:32]}'. Deve ter 32 ou 64 caracteres hex")
     return v
 
 def _validate_rtmp(v: Optional[str]) -> Optional[str]:

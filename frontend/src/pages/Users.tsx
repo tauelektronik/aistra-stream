@@ -54,8 +54,12 @@ export default function Users() {
 
   async function del(id: number, name: string) {
     if (!window.confirm(`Deletar usuário "${name}"?`)) return
-    await api.delete(`/api/users/${id}`)
-    load()
+    try {
+      await api.delete(`/api/users/${id}`)
+      load()
+    } catch (e: any) {
+      alert(e.response?.data?.detail || 'Erro ao deletar usuário')
+    }
   }
 
   return (
@@ -141,7 +145,7 @@ export default function Users() {
               </div>
               <div className="form-group">
                 <label>Email</label>
-                <input value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
+                <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="opcional" />
               </div>
               <div className="form-group">
                 <label>Papel</label>

@@ -649,10 +649,11 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
   const [downloading, setDl]    = useState<string | null>(null)
 
   // Schedules tab state
-  const [schedules, setSchedules]     = useState<any[]>([])
-  const [schedsLoading, setSchedsLoad] = useState(false)
-  const [streams, setStreams]          = useState<{ id: string; name: string }[]>([])
-  const [newSched, setNewSched]        = useState({
+  const [schedules, setSchedules]       = useState<any[]>([])
+  const [schedsLoading, setSchedsLoad]  = useState(false)
+  const [allStreams, setAllStreams]      = useState<{ id: string; name: string }[]>([])
+  const [streamsLoading, setStreamsLoad] = useState(false)
+  const [newSched, setNewSched]          = useState({
     stream_id: '', start_at: '', duration_min: '', label: '', repeat: 'none',
   })
 
@@ -667,7 +668,12 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
       .then(r => setRecs(r.data))
       .catch(() => setError('Erro ao carregar gravações. Verifique se você tem permissão.'))
       .finally(() => setLoading(false))
-    api.get('/api/streams').then(r => setStreams(r.data)).catch(() => {})
+
+    setStreamsLoad(true)
+    api.get('/api/streams')
+      .then(r => setAllStreams((r.data as any[]).map((s: any) => ({ id: s.id, name: s.name }))))
+      .catch(() => {})
+      .finally(() => setStreamsLoad(false))
   }, [])
 
   function loadSchedules() {
@@ -820,8 +826,10 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
                       value={newSched.stream_id}
                       onChange={e => setNewSched(p => ({ ...p, stream_id: e.target.value }))}
                     >
-                      <option value="">Selecionar…</option>
-                      {streams.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      <option value="">
+                        {streamsLoading ? 'Carregando streams…' : allStreams.length === 0 ? 'Nenhum stream cadastrado' : 'Selecionar…'}
+                      </option>
+                      {allStreams.map(s => <option key={s.id} value={s.id}>{s.name} ({s.id})</option>)}
                     </select>
                   </div>
                   <div>
@@ -900,7 +908,7 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
                     {schedules.map(s => (
                       <tr key={s.id} style={{ borderTop: '1px solid var(--border)' }}>
                         <td style={{ padding: '8px 8px', color: 'var(--text2)' }}>
-                          {streams.find(x => x.id === s.stream_id)?.name || s.stream_id}
+                          {allStreams.find(x => x.id === s.stream_id)?.name || s.stream_id}
                           {s.label && <span style={{ color: 'var(--text3)', marginLeft: 6, fontSize: 11 }}>({s.label})</span>}
                         </td>
                         <td style={{ padding: '8px 8px', color: 'var(--text3)', fontSize: 11 }}>{fmtTs(s.start_at)}</td>

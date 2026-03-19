@@ -778,7 +778,10 @@ async def server_stats(_=Depends(get_current_user)):
 @app.get("/health", include_in_schema=False)
 async def health(db: AsyncSession = Depends(get_db)):
     streams = await list_streams(db)
-    running = sum(1 for s in streams if await hls_manager.get_status(s.id) == "running")
+    running = 0
+    for s in streams:
+        if await hls_manager.get_status(s.id) == "running":
+            running += 1
     return {"status": "ok", "streams_total": len(streams), "streams_running": running}
 
 

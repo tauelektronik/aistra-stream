@@ -792,11 +792,16 @@ async def stream_hls_files(
         return Response(content="Não encontrado", status_code=404)
     base = os.path.join(HLS_BASE, stream_id)
     filepath = os.path.join(base, sub_quality, filename) if sub_quality else os.path.join(base, filename)
-    if not os.path.exists(filepath):
+    # Resolve symlinks and verify the file stays inside HLS_BASE
+    real_base = os.path.realpath(HLS_BASE)
+    real_fp   = os.path.realpath(filepath)
+    if not real_fp.startswith(real_base + os.sep):
+        return Response(content="Não encontrado", status_code=404)
+    if not os.path.exists(real_fp):
         return Response(content="Segmento não encontrado", status_code=404)
     hls_manager.touch(stream_id)
     try:
-        return FileResponse(filepath, media_type="video/mp2t", headers={"Cache-Control": "no-cache"})
+        return FileResponse(real_fp, media_type="video/mp2t", headers={"Cache-Control": "no-cache"})
     except FileNotFoundError:
         return Response(content="Segmento não encontrado", status_code=404)
 
@@ -897,10 +902,14 @@ async def api_download_recording(
     if re.search(r"[^a-zA-Z0-9_\-.]", filename) or ".." in filename:
         raise HTTPException(status_code=400, detail="Nome inválido")
     from backend.hls_manager import RECORDINGS_BASE
-    path = os.path.join(RECORDINGS_BASE, filename)
-    if not os.path.exists(path):
+    path      = os.path.join(RECORDINGS_BASE, filename)
+    real_base = os.path.realpath(RECORDINGS_BASE)
+    real_path = os.path.realpath(path)
+    if not real_path.startswith(real_base + os.sep):
+        raise HTTPException(status_code=400, detail="Nome inválido")
+    if not os.path.exists(real_path):
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
-    return FileResponse(path, media_type="video/mp4",
+    return FileResponse(real_path, media_type="video/mp4",
                         headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 

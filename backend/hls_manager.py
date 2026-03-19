@@ -647,6 +647,11 @@ class HLSManager:
         for f in glob.glob(f"{PIPE_BASE}/*.ts"):
             try: os.unlink(f)
             except Exception: pass
+        # Clean up leftover ffmpeg log/progress files from previous run
+        for pattern in ("/tmp/ffmpeg_*.log", "/tmp/ffmpeg_progress_*.txt", "/tmp/ffmpeg_rec_*.log"):
+            for f in glob.glob(pattern):
+                try: os.unlink(f)
+                except Exception: pass
         logger.info("Startup cleanup done")
 
     # ── CENC pipeline: n_m3u8dl → FIFO → ffmpeg ──────────────────────────────

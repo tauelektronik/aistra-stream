@@ -133,6 +133,7 @@ function LogModal({ streamId, onClose }: { streamId: string; onClose: () => void
     // Use fetch-based SSE with auth header (EventSource doesn't support headers)
     let closed = false
     const ctrl = new AbortController()
+    let activeReader: ReadableStreamDefaultReader<Uint8Array> | null = null
 
     async function connect() {
       try {
@@ -142,6 +143,7 @@ function LogModal({ streamId, onClose }: { streamId: string; onClose: () => void
         })
         if (!res.body) return
         const reader = res.body.getReader()
+        activeReader = reader
         const dec    = new TextDecoder()
         let buf      = ''
         while (!closed) {
@@ -163,7 +165,7 @@ function LogModal({ streamId, onClose }: { streamId: string; onClose: () => void
     }
 
     connect()
-    return () => { closed = true; ctrl.abort(); esRef.current?.close() }
+    return () => { closed = true; ctrl.abort(); activeReader?.cancel(); esRef.current?.close() }
   }, [streamId])
 
   useEffect(() => {
@@ -622,6 +624,7 @@ export default function Streams() {
   const [recording, setRecording]     = useState<Record<string, boolean>>({})
   const [stats, setStats]             = useState<Record<string, StreamStats>>({})
   const [thumbnails, setThumbnails]   = useState<Record<string, string>>({})
+  const thumbnailsRef                 = useRef<Record<string, string>>({})
   const [searchParams, setSearchParams]   = useSearchParams()
   const [search, setSearch]               = useState('')
   const [m3uError, setM3uError]           = useState('')
@@ -645,6 +648,14 @@ export default function Streams() {
   useEffect(() => { load() }, [load])
   useEffect(() => { const t = setInterval(load, 10000); return () => clearInterval(t) }, [load])
 
+  // Keep ref in sync with state so unmount cleanup can revoke all blob URLs
+  useEffect(() => { thumbnailsRef.current = thumbnails }, [thumbnails])
+
+  // Revoke all blob URLs on unmount to prevent memory leak
+  useEffect(() => {
+    return () => { Object.values(thumbnailsRef.current).forEach(u => URL.revokeObjectURL(u)) }
+  }, [])
+
   // When streams list changes, load thumbnails + recording status for running streams immediately
   useEffect(() => {
     if (streams.length === 0) return
@@ -659,7 +670,10 @@ export default function Streams() {
       }).then(async r => {
         if (r.ok) {
           const blob = await r.blob()
-          setThumbnails(prev => ({ ...prev, [s.id]: URL.createObjectURL(blob) }))
+          setThumbnails(prev => {
+            if (prev[s.id]) URL.revokeObjectURL(prev[s.id])
+            return { ...prev, [s.id]: URL.createObjectURL(blob) }
+          })
         }
       }).catch(() => {})
     }
@@ -705,7 +719,10 @@ export default function Streams() {
           })
           if (r.ok) {
             const blob = await r.blob()
-            setThumbnails(prev => ({ ...prev, [s.id]: URL.createObjectURL(blob) }))
+            setThumbnails(prev => {
+              if (prev[s.id]) URL.revokeObjectURL(prev[s.id])
+              return { ...prev, [s.id]: URL.createObjectURL(blob) }
+            })
           }
         } catch { /* ignore */ }
       }

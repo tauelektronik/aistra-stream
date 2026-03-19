@@ -52,7 +52,10 @@ function CategoryModal({
     const f = e.target.files?.[0]
     if (!f) return
     setLogoFile(f)
-    setPreview(URL.createObjectURL(f))
+    setPreview(prev => {
+      if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
+      return URL.createObjectURL(f)
+    })
     e.target.value = ''
   }
 
@@ -79,11 +82,15 @@ function CategoryModal({
       if (logoFile && catId) {
         const fd = new FormData()
         fd.append('file', logoFile)
-        await fetch(`/api/categories/${catId}/logo`, {
+        const logoRes = await fetch(`/api/categories/${catId}/logo`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
           body: fd,
         })
+        if (!logoRes.ok) {
+          const msg = await logoRes.text().catch(() => '')
+          throw new Error(`Erro ao enviar logo: ${logoRes.status}${msg ? ' — ' + msg : ''}`)
+        }
       }
       // Assign streams
       if (catId !== undefined) {

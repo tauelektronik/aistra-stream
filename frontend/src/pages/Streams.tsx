@@ -673,9 +673,9 @@ export default function Streams() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streams])
 
-  // Poll stats for running streams every 5s
+  // Poll stats for running streams every 5s (also fires immediately on first run)
   useEffect(() => {
-    const t = setInterval(async () => {
+    async function fetchStats() {
       const running = streams.filter(s => s.status === 'running')
       if (running.length === 0) return
       const results = await Promise.allSettled(
@@ -687,7 +687,9 @@ export default function Streams() {
         if (r.status === 'fulfilled') next[s.id] = r.value.data
       })
       setStats(prev => ({ ...prev, ...next }))
-    }, 5000)
+    }
+    fetchStats()
+    const t = setInterval(fetchStats, 5000)
     return () => clearInterval(t)
   }, [streams])
 
@@ -753,22 +755,30 @@ export default function Streams() {
     return m > 0 ? `${h}h ${m}m` : `${h}h`
   }
 
-  function StatsLine({ id }: { id: string }) {
+  function StatsLine({ id, streamRunning }: { id: string; streamRunning: boolean }) {
     const s = stats[id]
-    if (!s || !s.running) return null
-    const kbps       = s.bitrate_kbps
-    const mbps       = kbps > 0 ? (kbps > 1000 ? `${(kbps/1000).toFixed(1)} Mbps` : `${kbps} kbps`) : null
-    const fps        = s.fps && s.fps !== '0' ? `${s.fps} fps` : null
-    const uptime     = s.uptime_s > 0 ? `⏱ ${fmtUptime(s.uptime_s)}` : null
-    const speed      = s.speed && s.speed !== '' ? s.speed : null
-    const totalSize  = s.total_size_mb > 0 ? `${s.total_size_mb >= 1024 ? (s.total_size_mb/1024).toFixed(1)+' GB' : s.total_size_mb+' MB'}` : null
-    const hasDrops   = s.drop_frames > 0
+    // Show only when stream is running and we have at least one meaningful value
+    if (!streamRunning || !s) return null
+    const kbps      = s.bitrate_kbps
+    const mbps      = kbps > 0 ? (kbps > 1000 ? `${(kbps/1000).toFixed(1)} Mbps` : `${kbps} kbps`) : null
+    const fps       = s.fps && s.fps !== '0' && s.fps !== '0.00' ? `${parseFloat(s.fps).toFixed(0)} fps` : null
+    const uptime    = s.uptime_s > 0 ? `⏱ ${fmtUptime(s.uptime_s)}` : null
+    const speed     = s.speed && s.speed !== '' && s.speed !== '0x' ? s.speed : null
+    const totalSize = s.total_size_mb > 0
+      ? (s.total_size_mb >= 1024 ? `${(s.total_size_mb/1024).toFixed(1)} GB` : `${s.total_size_mb} MB`)
+      : null
+    const hasDrops  = s.drop_frames > 0
+
+    const parts = [uptime, mbps ? `⚡ ${mbps}` : null, fps, speed, totalSize].filter(Boolean)
+    if (parts.length === 0 && !hasDrops) return null
 
     return (
       <div style={{ marginTop:2, display:'flex', flexDirection:'column', gap:1 }}>
-        <div style={{ fontSize:10, color:'var(--success)' }}>
-          {[uptime, mbps && `⚡ ${mbps}`, fps, speed && `${speed}`, totalSize].filter(Boolean).join(' · ')}
-        </div>
+        {parts.length > 0 && (
+          <div style={{ fontSize:10, color:'var(--success)' }}>
+            {parts.join(' · ')}
+          </div>
+        )}
         {hasDrops && (
           <div style={{ fontSize:10, color:'var(--warning)' }}>
             ⚠️ {s.drop_frames} frames descartados
@@ -944,7 +954,7 @@ export default function Streams() {
                           <span style={{ color:'#818cf8' }}>· 🔐 DRM</span>
                         )}
                       </div>
-                      <StatsLine id={s.id} />
+                      <StatsLine id={s.id} streamRunning={s.status === 'running'} />
                     </td>
                     <td className="col-hide-xs"><code style={{ fontSize:12, color:'var(--text2)' }}>{s.id}</code></td>
                     <td className="col-hide-xs">

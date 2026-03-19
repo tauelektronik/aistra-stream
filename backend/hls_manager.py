@@ -436,29 +436,47 @@ class HLSManager:
         if not data:
             data = _parse_stats_from_log(f"/tmp/ffmpeg_{sid}.log")
 
-        sess     = self._sessions.get(stream_id)
-        running  = sess is not None and sess["proc"].returncode is None
-        started  = sess["started_at"] if sess else None
-        uptime   = int(asyncio.get_event_loop().time() - started) if started else 0
+        sess    = self._sessions.get(stream_id)
+        running = sess is not None and sess["proc"].returncode is None
+
+        # If no active session, treat as running when progress file is fresh (< 30 s)
+        if not running and data:
+            try:
+                mtime = os.path.getmtime(prog)
+                if time.time() - mtime < 30:
+                    running = True
+            except OSError:
+                pass
+
+        # Uptime: prefer session start time; fall back to out_time_us from progress
+        started = sess["started_at"] if sess else None
+        if started:
+            uptime = int(asyncio.get_event_loop().time() - started)
+        else:
+            try:
+                uptime = int(int(data.get("out_time_us", 0) or 0) / 1_000_000)
+            except (ValueError, TypeError):
+                uptime = 0
+
+        def _safe_int(v, default=0):
+            try: return int(v or default)
+            except (ValueError, TypeError): return default
 
         fps          = data.get("fps",   "0")
         bitrate      = data.get("bitrate", "")
         frame        = data.get("frame",  "0")
-        speed        = data.get("speed",  "")
-        def _safe_int(v, default=0):
-            try: return int(v or default)
-            except (ValueError, TypeError): return default
+        speed        = (data.get("speed", "") or "").strip()
         drop_frames  = _safe_int(data.get("drop_frames", 0))
         dup_frames   = _safe_int(data.get("dup_frames",  0))
         total_size_b = _safe_int(data.get("total_size",  0))
 
-        # Parse bitrate from progress file (format: "12345.6kbits/s" or "12345.6")
+        # Parse bitrate ("12345.6kbits/s", "N/A", or plain number)
         bitrate_kbps = 0.0
-        if bitrate:
+        if bitrate and bitrate != "N/A":
             m = re.search(r"([\d.]+)", bitrate)
             if m:
                 val = float(m.group(1))
-                bitrate_kbps = val if val < 100000 else val / 1000  # handle bps vs kbps
+                bitrate_kbps = val if val < 100000 else val / 1000
 
         return {
             "running":        running,

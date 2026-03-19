@@ -330,6 +330,21 @@ tr:hover td { background: rgba(59,130,246,.04); }
   background: var(--accent-glow);
   border-right: 2px solid var(--accent);
 }
+.nav-group-header {
+  display: flex; align-items: center; gap: 10px; padding: 10px 20px;
+  color: var(--text3); font-size: 13px; cursor: pointer;
+  transition: color .15s, background .15s; user-select: none;
+  justify-content: space-between;
+}
+.nav-group-header:hover { color: var(--text); background: var(--bg3); }
+.nav-group-header.open  { color: var(--text); }
+.nav-group-header-left  { display: flex; align-items: center; gap: 10px; }
+.nav-group-chevron { transition: transform .2s; font-size: 10px; margin-right: 4px; }
+.nav-group-chevron.open { transform: rotate(90deg); }
+.nav-sub { display: flex; flex-direction: column; gap: 1px; overflow: hidden;
+           max-height: 0; transition: max-height .2s ease; }
+.nav-sub.open { max-height: 200px; }
+.nav-sub .nav-item { padding-left: 40px; font-size: 12px; }
 .sidebar-bottom {
   padding: 16px 20px;
   border-top: 1px solid var(--border);

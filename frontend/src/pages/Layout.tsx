@@ -1,15 +1,25 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { FiGrid, FiVideo, FiUsers, FiLogOut, FiRadio, FiSettings } from 'react-icons/fi'
+import { FiGrid, FiVideo, FiUsers, FiLogOut, FiRadio, FiSettings, FiChevronRight } from 'react-icons/fi'
 
 export default function Layout() {
   const nav      = useNavigate()
   const location = useLocation()
   const user     = JSON.parse(localStorage.getItem('user') || '{}')
-  const [open, setOpen] = useState(false)
+  const [open, setOpen]           = useState(false)
+  const [configOpen, setConfigOpen] = useState(
+    () => ['/settings', '/users'].some(p => location.pathname.startsWith(p))
+  )
 
   // Close sidebar on navigation (mobile)
   useEffect(() => { setOpen(false) }, [location.pathname])
+
+  // Auto-expand config sub-menu when navigating to a child route
+  useEffect(() => {
+    if (['/settings', '/users'].some(p => location.pathname.startsWith(p))) {
+      setConfigOpen(true)
+    }
+  }, [location.pathname])
 
   // Prevent body scroll when sidebar open on mobile
   useEffect(() => {
@@ -43,14 +53,25 @@ export default function Layout() {
             <FiVideo size={16} /> Streams
           </NavLink>
           {user.role === 'admin' && (
-            <NavLink to="/users" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
-              <FiUsers size={16} /> Usuários
-            </NavLink>
-          )}
-          {user.role === 'admin' && (
-            <NavLink to="/settings" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
-              <FiSettings size={16} /> Configurações
-            </NavLink>
+            <div>
+              <div
+                className={`nav-group-header${configOpen ? ' open' : ''}`}
+                onClick={() => setConfigOpen(o => !o)}
+              >
+                <span className="nav-group-header-left">
+                  <FiSettings size={16} /> Configurações
+                </span>
+                <FiChevronRight size={12} className={`nav-group-chevron${configOpen ? ' open' : ''}`} />
+              </div>
+              <div className={`nav-sub${configOpen ? ' open' : ''}`}>
+                <NavLink to="/settings" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+                  <FiSettings size={13} /> Geral
+                </NavLink>
+                <NavLink to="/users" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+                  <FiUsers size={13} /> Usuários
+                </NavLink>
+              </div>
+            </div>
           )}
         </nav>
         <div className="sidebar-bottom">

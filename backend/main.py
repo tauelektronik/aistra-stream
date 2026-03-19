@@ -407,6 +407,107 @@ async def api_save_settings(body: dict, _=Depends(require_admin)):
     return {"ok": True}
 
 
+# ── Backup / Restore ──────────────────────────────────────────────────────────
+
+@app.get("/api/settings/backup")
+async def api_backup(
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    """Export all streams + app settings as a JSON backup (admin only)."""
+    import json as _json
+    from datetime import timezone
+
+    streams = await list_streams(db)
+    streams_data = []
+    for s in streams:
+        row = {}
+        for col in s.__table__.columns:
+            v = getattr(s, col.name)
+            if hasattr(v, "isoformat"):
+                v = v.isoformat()
+            row[col.name] = v
+        streams_data.append(row)
+
+    settings = _load_settings()
+    # Mask Telegram token in backup to avoid leaking secrets — user must re-enter
+    masked_settings = dict(settings)
+    if masked_settings.get("telegram_bot_token"):
+        masked_settings["telegram_bot_token"] = ""
+
+    payload = {
+        "version": 1,
+        "exported_at": __import__("datetime").datetime.now(timezone.utc).isoformat(),
+        "streams": streams_data,
+        "settings": masked_settings,
+    }
+    content = _json.dumps(payload, ensure_ascii=False, indent=2)
+    return Response(
+        content,
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=\"aistra-backup.json\""},
+    )
+
+
+@app.post("/api/settings/restore", status_code=200)
+async def api_restore(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    actor=Depends(require_admin),
+):
+    """Import streams + settings from a previously exported JSON backup (admin only)."""
+    import json as _json
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+
+    if body.get("version") != 1:
+        raise HTTPException(status_code=400, detail="Formato de backup não reconhecido (version != 1)")
+
+    created = updated = skipped = 0
+
+    for row in body.get("streams", []):
+        sid = row.get("id")
+        if not sid:
+            skipped += 1
+            continue
+        try:
+            # Strip non-model fields and datetimes — let ORM handle timestamps
+            for ts_field in ("created_at", "updated_at"):
+                row.pop(ts_field, None)
+            existing = await get_stream(db, sid)
+            if existing:
+                from backend.schemas import StreamUpdate as SU
+                data = SU(**{k: v for k, v in row.items() if k != "id"})
+                await update_stream(db, sid, data)
+                updated += 1
+            else:
+                from backend.schemas import StreamCreate as SC
+                data = SC(**row)
+                await create_stream(db, data)
+                created += 1
+        except Exception as exc:
+            logger.warning("Restore: skipped stream %s: %s", sid, exc)
+            skipped += 1
+
+    if body.get("settings"):
+        current = _load_settings()
+        # Don't overwrite token with empty string from backup — keep existing
+        imported = dict(body["settings"])
+        if not imported.get("telegram_bot_token"):
+            imported.pop("telegram_bot_token", None)
+        current.update(imported)
+        _save_settings(current)
+
+    audit.info("RESTORE actor=%s created=%d updated=%d skipped=%d ip=%s",
+               actor.username, created, updated, skipped,
+               request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
+
+    return {"created": created, "updated": updated, "skipped": skipped}
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/health", include_in_schema=False)

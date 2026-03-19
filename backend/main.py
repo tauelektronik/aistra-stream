@@ -321,12 +321,15 @@ async def api_update_stream(
     db: AsyncSession = Depends(get_db),
     _=Depends(require_operator),
 ):
+    was_running = (await hls_manager.get_status(stream_id)) == "running"
     s = await update_stream(db, stream_id, body)
     if not s:
         raise HTTPException(status_code=404, detail="Stream não encontrado")
     await hls_manager.stop_session(stream_id)
+    if was_running and s.enabled:
+        await hls_manager.get_hls_dir(s, force_restart=True)
     out        = StreamOut.model_validate(s)
-    out.status = await hls_manager.get_status(s.id)  # always "stopped" post-kill, but consistent
+    out.status = await hls_manager.get_status(s.id)
     return out
 
 

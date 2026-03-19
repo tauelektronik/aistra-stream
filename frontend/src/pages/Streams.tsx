@@ -932,6 +932,18 @@ export default function Streams() {
                       <div style={{ fontSize:11, color:'var(--text3)', marginTop:1, maxWidth:260, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                         {s.url.length > 55 ? s.url.slice(0,55)+'…' : s.url}
                       </div>
+                      {/* Video / audio info — always visible */}
+                      <div style={{ fontSize:10, color:'var(--text3)', marginTop:2, display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
+                        <span>🎬 {s.video_codec === 'copy' ? 'copy' : `${s.video_codec}`}</span>
+                        {s.video_resolution && s.video_resolution !== 'original' && (
+                          <span>· {s.video_resolution}</span>
+                        )}
+                        <span>· 🔊 {s.audio_codec}{s.audio_codec !== 'copy' ? ` ${s.audio_bitrate}` : ''}</span>
+                        {s.buffer_seconds && <span>· ⏳ buf {s.buffer_seconds}s</span>}
+                        {s.drm_type === 'cenc-ctr' && (
+                          <span style={{ color:'#818cf8' }}>· 🔐 DRM</span>
+                        )}
+                      </div>
                       <StatsLine id={s.id} />
                     </td>
                     <td className="col-hide-xs"><code style={{ fontSize:12, color:'var(--text2)' }}>{s.id}</code></td>
@@ -945,14 +957,6 @@ export default function Streams() {
                       <span style={{ fontSize:12, color:'var(--text2)' }}>
                         {s.video_codec === 'copy' ? 'copy' : `${s.video_codec} ${s.video_preset}`}
                       </span>
-                      {s.video_resolution && s.video_resolution !== 'original' && (
-                        <div style={{ fontSize:10, color:'var(--text3)', marginTop:1 }}>{s.video_resolution}</div>
-                      )}
-                      {s.audio_codec && (
-                        <div style={{ fontSize:10, color:'var(--text3)', marginTop:1 }}>
-                          🔊 {s.audio_codec}{s.audio_codec !== 'copy' ? ` ${s.audio_bitrate}` : ''}
-                        </div>
-                      )}
                     </td>
                     <td className="col-hide-xs"><span style={{ fontSize:12, color:'var(--text2)' }}>{s.buffer_seconds}s</span></td>
                     <td><StatusBadge status={s.status} /></td>

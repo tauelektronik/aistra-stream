@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { FiGrid, FiVideo, FiUsers, FiLogOut, FiRadio } from 'react-icons/fi'
+import { FiGrid, FiVideo, FiUsers, FiLogOut, FiRadio, FiSettings } from 'react-icons/fi'
 
 export default function Layout() {
   const nav      = useNavigate()
@@ -45,6 +45,11 @@ export default function Layout() {
           {user.role === 'admin' && (
             <NavLink to="/users" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
               <FiUsers size={16} /> Usuários
+            </NavLink>
+          )}
+          {user.role === 'admin' && (
+            <NavLink to="/settings" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+              <FiSettings size={16} /> Configurações
             </NavLink>
           )}
         </nav>

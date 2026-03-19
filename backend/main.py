@@ -34,6 +34,7 @@ from backend.schemas import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+audit = logging.getLogger("aistra.audit")   # separate audit trail
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
@@ -64,6 +65,12 @@ async def lifespan(app: FastAPI):
     hls_manager.startup_cleanup()
     hls_manager.start_background_cleanup()
     await _ensure_default_admin()
+    # Apply persisted settings
+    _s = _load_settings()
+    if _s.get("telegram_bot_token"):
+        hls_manager.TELEGRAM_BOT_TOKEN = _s["telegram_bot_token"]
+    if _s.get("telegram_chat_id"):
+        hls_manager.TELEGRAM_CHAT_ID = _s["telegram_chat_id"]
     logger.info("aistra-stream started")
     yield
 
@@ -120,6 +127,15 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; "
+        "media-src 'self' blob:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none';"
+    )
     return response
 
 
@@ -158,13 +174,18 @@ async def api_list_users(
 @app.post("/api/users", response_model=UserOut, status_code=201)
 async def api_create_user(
     body: UserCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    _=Depends(require_admin),
+    actor=Depends(require_admin),
 ):
     existing = await get_user_by_username(db, body.username)
     if existing:
         raise HTTPException(status_code=400, detail="Username já existe")
-    return await create_user(db, body)
+    user = await create_user(db, body)
+    audit.info("USER_CREATE actor=%s target=%s role=%s ip=%s",
+               actor.username, body.username, body.role,
+               request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
+    return user
 
 
 @app.put("/api/users/{user_id}", response_model=UserOut)
@@ -183,11 +204,15 @@ async def api_update_user(
 @app.delete("/api/users/{user_id}", status_code=204)
 async def api_delete_user(
     user_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    _=Depends(require_admin),
+    actor=Depends(require_admin),
 ):
     if not await delete_user(db, user_id):
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    audit.info("USER_DELETE actor=%s target_id=%s ip=%s",
+               actor.username, user_id,
+               request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
 
 
 # ── Stream CRUD ───────────────────────────────────────────────────────────────
@@ -209,8 +234,9 @@ async def api_list_streams(
 @app.post("/api/streams", response_model=StreamOut, status_code=201)
 async def api_create_stream(
     body: StreamCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    _=Depends(require_operator),
+    actor=Depends(require_operator),
 ):
     existing = await get_stream(db, body.id)
     if existing:
@@ -218,6 +244,9 @@ async def api_create_stream(
     s   = await create_stream(db, body)
     out = StreamOut.model_validate(s)
     out.status = "stopped"
+    audit.info("STREAM_CREATE actor=%s id=%s name=%s ip=%s",
+               actor.username, body.id, body.name,
+               request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
     return out
 
 
@@ -254,12 +283,25 @@ async def api_update_stream(
 @app.delete("/api/streams/{stream_id}", status_code=204)
 async def api_delete_stream(
     stream_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    _=Depends(require_operator),
+    actor=Depends(require_operator),
 ):
     await hls_manager.stop_session(stream_id)
+    # Cascade: delete thumbnail
+    from backend.hls_manager import THUMBNAILS_BASE
+    sid = re.sub(r"[^a-zA-Z0-9_-]", "_", stream_id)
+    thumb = os.path.join(THUMBNAILS_BASE, f"{sid}.jpg")
+    if os.path.exists(thumb):
+        try:
+            os.unlink(thumb)
+        except OSError:
+            pass
     if not await delete_stream(db, stream_id):
         raise HTTPException(status_code=404, detail="Stream não encontrado")
+    audit.info("STREAM_DELETE actor=%s id=%s ip=%s",
+               actor.username, stream_id,
+               request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
 
 
 @app.post("/api/streams/{stream_id}/stop", status_code=200)
@@ -289,6 +331,89 @@ async def api_stream_log(
         content = f.read().decode("utf-8", errors="replace")
     tail = "\n".join(content.splitlines()[-lines:])
     return {"log": tail}
+
+
+# ── M3U export ────────────────────────────────────────────────────────────────
+
+@app.get("/api/streams/export.m3u")
+async def export_m3u(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    """Export all enabled streams as an M3U playlist (HLS URLs)."""
+    streams = await list_streams(db)
+    base_url = str(request.base_url).rstrip("/")
+    lines = ["#EXTM3U"]
+    for s in streams:
+        if not s.enabled:
+            continue
+        group = s.category or "Sem Categoria"
+        lines.append(f'#EXTINF:-1 tvg-id="{s.id}" tvg-name="{s.name}" group-title="{group}",{s.name}')
+        lines.append(f"{base_url}/stream/{s.id}/hls/stream.m3u8")
+    content = "\r\n".join(lines) + "\r\n"
+    return Response(content, media_type="application/x-mpegurl",
+                    headers={"Content-Disposition": "attachment; filename=\"aistra.m3u\""})
+
+
+# ── App settings ──────────────────────────────────────────────────────────────
+
+_SETTINGS_FILE = os.getenv("AISTRA_SETTINGS_FILE", "/tmp/aistra_settings.json")
+
+def _load_settings() -> dict:
+    if os.path.exists(_SETTINGS_FILE):
+        try:
+            with open(_SETTINGS_FILE) as f:
+                import json
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def _save_settings(data: dict):
+    import json
+    tmp = _SETTINGS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, _SETTINGS_FILE)
+
+
+@app.get("/api/settings")
+async def api_get_settings(_=Depends(require_admin)):
+    """Return current app settings (admin only)."""
+    s = _load_settings()
+    # Never expose secrets — mask token
+    masked = dict(s)
+    if masked.get("telegram_bot_token"):
+        t = masked["telegram_bot_token"]
+        masked["telegram_bot_token"] = t[:8] + "***" if len(t) > 8 else "***"
+    return masked
+
+
+@app.put("/api/settings")
+async def api_save_settings(body: dict, _=Depends(require_admin)):
+    """Save app settings (admin only)."""
+    current = _load_settings()
+    # Don't overwrite token if masked placeholder was sent
+    if body.get("telegram_bot_token", "").endswith("***"):
+        body["telegram_bot_token"] = current.get("telegram_bot_token", "")
+    current.update(body)
+    _save_settings(current)
+    # Push Telegram config into hls_manager at runtime
+    if "telegram_bot_token" in current:
+        hls_manager.TELEGRAM_BOT_TOKEN = current.get("telegram_bot_token", "")
+    if "telegram_chat_id" in current:
+        hls_manager.TELEGRAM_CHAT_ID = current.get("telegram_chat_id", "")
+    return {"ok": True}
+
+
+# ── Health ────────────────────────────────────────────────────────────────────
+
+@app.get("/health", include_in_schema=False)
+async def health(db: AsyncSession = Depends(get_db)):
+    streams = await list_streams(db)
+    running = sum(1 for s in streams if hls_manager._sessions.get(s.id) is not None)
+    return {"status": "ok", "streams_total": len(streams), "streams_running": running}
 
 
 # ── HLS delivery ──────────────────────────────────────────────────────────────

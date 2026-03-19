@@ -161,6 +161,7 @@ class StreamBase(BaseModel):
     proxy:            Optional[str] = None   # http://user:pass@host:port or socks5://host:port
     user_agent:       Optional[str] = None   # custom User-Agent header
     backup_urls:      Optional[str] = None   # newline-separated fallback URLs (failover/balance)
+    category:         Optional[str] = None   # free-form grouping tag, e.g. "Esportes"
     enabled:          bool = True
 
     @field_validator("url")

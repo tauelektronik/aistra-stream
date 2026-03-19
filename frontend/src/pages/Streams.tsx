@@ -20,6 +20,7 @@ interface Stream {
   output_rtmp?: string; output_udp?: string
   proxy?: string; user_agent?: string; backup_urls?: string
   output_qualities?: string; audio_track?: number
+  category?: string
   enabled: boolean; status: string
   created_at: string; updated_at: string
 }
@@ -38,6 +39,7 @@ const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
   output_rtmp:'', output_udp:'',
   proxy:'', user_agent:'', backup_urls:'',
   output_qualities:'', audio_track:0,
+  category:'',
   enabled:true,
 }
 
@@ -116,6 +118,12 @@ function LogModal({ streamId, onClose }: { streamId: string; onClose: () => void
   const [lines, setLines]    = useState<string[]>([])
   const bottomRef            = useRef<HTMLDivElement>(null)
   const esRef                = useRef<EventSource | null>(null)
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [onClose])
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -237,6 +245,12 @@ function StreamModal({ stream, onSave, onClose }: {
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState('')
 
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [onClose])
+
   function set(k: string, v: any) { setForm((f: any) => ({ ...f, [k]: v })) }
 
   async function save() {
@@ -288,6 +302,9 @@ function StreamModal({ stream, onSave, onClose }: {
                      disabled={!isNew} placeholder="globo_hd" />
             </Row>
             <Row label="Nome"><input value={form.name} onChange={e => set('name', e.target.value)} placeholder="Globo HD" /></Row>
+            <Row label="Categoria" hint="Agrupa os streams por categoria (ex: Esportes, Notícias, Filmes)">
+              <input value={form.category ?? ''} onChange={e => set('category', e.target.value)} placeholder="Ex: Esportes" />
+            </Row>
             <Row label="URL" hint="HLS (.m3u8), MPEG-TS, YouTube, CENC/CMAF">
               <textarea value={form.url} onChange={e => set('url', e.target.value)} rows={3} placeholder="https://..." />
             </Row>
@@ -489,6 +506,12 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
   const [downloading, setDl]    = useState<string | null>(null)
 
   useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  useEffect(() => {
     api.get('/api/recordings').then(r => setRecs(r.data)).finally(() => setLoading(false))
   }, [])
 
@@ -575,6 +598,8 @@ export default function Streams() {
   const [recording, setRecording]     = useState<Record<string, boolean>>({})
   const [stats, setStats]             = useState<Record<string, StreamStats>>({})
   const [thumbnails, setThumbnails]   = useState<Record<string, string>>({})
+  const [search, setSearch]           = useState('')
+  const [activeCategory, setActiveCategory] = useState<string | null>(null)
 
   const user    = JSON.parse(localStorage.getItem('user') || '{}')
   const canEdit = user.role === 'admin' || user.role === 'operator'
@@ -676,6 +701,14 @@ export default function Streams() {
     }
   }
 
+  // Derived: categories list + filtered streams
+  const categories = Array.from(new Set(streams.map(s => s.category || '').filter(Boolean))).sort()
+  const filteredStreams = streams.filter(s => {
+    const matchSearch   = !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.id.toLowerCase().includes(search.toLowerCase())
+    const matchCategory = !activeCategory || (s.category || '') === activeCategory
+    return matchSearch && matchCategory
+  })
+
   function StatusBadge({ status }: { status: string }) {
     const cls = status === 'running' ? 'badge-running' : status === 'error' ? 'badge-error' : 'badge-stopped'
     const dot = status === 'running' ? '●' : status === 'error' ? '●' : '○'
@@ -704,6 +737,20 @@ export default function Streams() {
           <button className="btn btn-ghost btn-sm" onClick={() => setShowRecs(true)}>
             <FiDownload size={13} /> Gravações
           </button>
+          <button className="btn btn-ghost btn-sm" title="Baixar lista M3U com todos os streams"
+            onClick={async () => {
+              const res = await fetch('/api/streams/export.m3u', {
+                headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+              })
+              if (!res.ok) return
+              const blob = await res.blob()
+              const url  = URL.createObjectURL(blob)
+              const a    = document.createElement('a')
+              a.href = url; a.download = 'aistra.m3u'; a.click()
+              URL.revokeObjectURL(url)
+            }}>
+            <FiExternalLink size={13} /> M3U
+          </button>
           <button className="btn btn-ghost btn-sm" onClick={load}><FiRefreshCw size={13} /> Atualizar</button>
           {canEdit && (
             <button className="btn btn-primary btn-sm" onClick={() => setEditing('new')}>
@@ -711,6 +758,38 @@ export default function Streams() {
             </button>
           )}
         </div>
+      </div>
+
+      {/* Search bar */}
+      <div style={{ padding:'0 0 12px', display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+        <input
+          type="search"
+          placeholder="Buscar stream por nome ou ID…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ flex:1, minWidth:200, maxWidth:380 }}
+        />
+        {categories.length > 0 && (
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+            <button
+              className={`btn btn-sm${!activeCategory ? ' btn-primary' : ' btn-ghost'}`}
+              onClick={() => setActiveCategory(null)}
+              style={{ fontSize:12 }}
+            >
+              Todas
+            </button>
+            {categories.map(cat => (
+              <button
+                key={cat}
+                className={`btn btn-sm${activeCategory === cat ? ' btn-primary' : ' btn-ghost'}`}
+                onClick={() => setActiveCategory(activeCategory === cat ? null : cat)}
+                style={{ fontSize:12 }}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="page-content">
@@ -782,7 +861,11 @@ export default function Streams() {
                 </tr>
               </thead>
               <tbody>
-                {streams.map(s => (
+                {filteredStreams.length === 0 ? (
+                  <tr><td colSpan={8} style={{ textAlign:'center', padding:32, color:'var(--text3)' }}>
+                    Nenhum stream encontrado
+                  </td></tr>
+                ) : filteredStreams.map(s => (
                   <tr key={s.id}>
                     {/* Thumbnail */}
                     <td style={{ padding:'4px 8px' }}>
@@ -795,7 +878,14 @@ export default function Streams() {
                       )}
                     </td>
                     <td>
-                      <div style={{ fontWeight:500, color:'var(--text)' }}>{s.name}</div>
+                      <div style={{ fontWeight:500, color:'var(--text)', display:'flex', alignItems:'center', gap:6 }}>
+                        {s.name}
+                        {s.category && (
+                          <span style={{ fontSize:10, padding:'1px 6px', borderRadius:10, background:'var(--bg3)', color:'var(--text2)', fontWeight:400 }}>
+                            {s.category}
+                          </span>
+                        )}
+                      </div>
                       <div style={{ fontSize:11, color:'var(--text3)', marginTop:1, maxWidth:260, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                         {s.url.length > 55 ? s.url.slice(0,55)+'…' : s.url}
                       </div>

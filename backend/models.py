@@ -97,6 +97,9 @@ class Stream(Base):
     user_agent    : Mapped[str|None] = mapped_column(String(500), nullable=True)   # custom UA string
     backup_urls   : Mapped[str|None] = mapped_column(Text, nullable=True)          # newline-separated fallback URLs (failover)
 
+    # Category / grouping
+    category      : Mapped[str|None] = mapped_column(String(100), nullable=True)   # e.g. "Esportes", "Notícias"
+
     # Metadata
     enabled       : Mapped[bool]     = mapped_column(Boolean, default=True)
     created_at    : Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

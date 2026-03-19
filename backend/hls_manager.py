@@ -322,6 +322,7 @@ class HLSManager:
         self._last_restart:    dict = {}   # stream_id → timestamp of last restart
         self._stall_counts:    dict = {}   # stream_id → consecutive zero-bitrate poll count
         self._recordings:      dict = {}   # stream_id → {proc, path, started_at}
+        self._starting:        set  = set()  # stream_ids currently being spawned (prevents duplicate starts)
         self._lock            = asyncio.Lock()
         self._cleanup_task:   Optional[asyncio.Task] = None
         self._watchdog_task:  Optional[asyncio.Task] = None
@@ -339,6 +340,8 @@ class HLSManager:
             self._url_idx.pop(stream_id, None)
             self._restart_counts.pop(stream_id, None)
             self._last_restart.pop(stream_id, None)
+            self._stall_counts.pop(stream_id, None)
+            self._starting.discard(stream_id)
             await self._kill_session(stream_id)
 
     async def get_status(self, stream_id: str) -> str:
@@ -360,10 +363,21 @@ class HLSManager:
         return urls[idx], urls
 
     async def get_hls_dir(self, stream, force_restart: bool = False) -> tuple[str, Optional[str]]:
-        """Return (hls_dir, error). Starts or reuses a session."""
+        """Return (hls_dir, error). Starts or reuses a session.
+
+        Lock is held only for the fast check/cleanup phases.
+        The slow ffmpeg/yt-dlp spawn runs outside the lock to avoid blocking
+        other concurrent stream starts.
+        """
         sid = stream.id
 
+        # ── Phase 1: check existing session / cleanup (fast, under lock) ─────
         async with self._lock:
+            if sid in self._starting:
+                # Another coroutine is already spawning this stream — return hls_dir
+                # optimistically; the caller will wait for the playlist anyway.
+                return os.path.join(HLS_BASE, sid), None
+
             sess = self._sessions.get(sid)
             if sess and not force_restart:
                 if sess["proc"].returncode is None:
@@ -375,29 +389,39 @@ class HLSManager:
                 logger.info("Stream %s: process died, rotating to URL index %d/%d",
                             sid, self._url_idx[sid], len(urls))
                 await self._kill_session(sid)
+            elif sess and force_restart:
+                await self._kill_session(sid)
 
-            hls_dir = os.path.join(HLS_BASE, sid)
-            os.makedirs(hls_dir, exist_ok=True)
-
+            hls_dir    = os.path.join(HLS_BASE, sid)
             active_url, _ = self._get_active_url(stream)
-            is_cenc = (stream.drm_type == "cenc-ctr") and (
+            is_cenc    = (stream.drm_type == "cenc-ctr") and (
                 stream.drm_keys or (stream.drm_kid and stream.drm_key)
             )
-            try:
-                if is_cenc:
-                    sess = await self._start_cenc_session(stream, hls_dir, active_url)
-                else:
-                    sess = await self._start_http_session(stream, hls_dir, active_url)
-            except Exception as exc:
-                logger.error("HLS start failed for %s: %s", sid, exc)
-                return hls_dir, str(exc)
+            self._starting.add(sid)   # prevent duplicate concurrent starts
 
-            now = asyncio.get_event_loop().time()
-            sess["stream"]     = stream
-            sess["started_at"] = now
-            sess["last_touch"] = now
+        os.makedirs(hls_dir, exist_ok=True)
+
+        # ── Phase 2: spawn ffmpeg (slow — outside lock) ───────────────────────
+        try:
+            if is_cenc:
+                sess = await self._start_cenc_session(stream, hls_dir, active_url)
+            else:
+                sess = await self._start_http_session(stream, hls_dir, active_url)
+        except Exception as exc:
+            logger.error("HLS start failed for %s: %s", sid, exc)
+            async with self._lock:
+                self._starting.discard(sid)
+            return hls_dir, str(exc)
+
+        # ── Phase 3: store session (fast, under lock) ─────────────────────────
+        now = asyncio.get_event_loop().time()
+        sess["stream"]     = stream
+        sess["started_at"] = now
+        sess["last_touch"] = now
+        async with self._lock:
+            self._starting.discard(sid)
             self._sessions[sid] = sess
-            return hls_dir, None
+        return hls_dir, None
 
     def touch(self, stream_id: str):
         sess = self._sessions.get(stream_id)
@@ -674,13 +698,25 @@ class HLSManager:
             "-hls_segment_filename", os.path.join(hls_dir, "seg%05d.ts"),
             playlist,
         ]
-        ff_log  = open(f"/tmp/ffmpeg_{sid}.log", "ab")
-        ff_proc = await asyncio.create_subprocess_exec(
-            *ff_args,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=ff_log,
-        )
+        ff_log = open(f"/tmp/ffmpeg_{sid}.log", "ab")
+        try:
+            ff_proc = await asyncio.create_subprocess_exec(
+                *ff_args,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=ff_log,
+            )
+        except Exception:
+            # ffmpeg spawn failed — kill n_m3u8dl and clean up FIFO
+            try: n_proc.kill()
+            except Exception: pass
+            try: n_log.close()
+            except Exception: pass
+            try: ff_log.close()
+            except Exception: pass
+            try: os.unlink(fifo_path)
+            except Exception: pass
+            raise
 
         return {
             "proc":       ff_proc,
@@ -839,8 +875,11 @@ class HLSManager:
                      if now - s.get("last_touch", now) > 60]
             for sid in stale:
                 logger.info("HLS cleanup: idle session %s", sid)
-                async with self._lock:
-                    await self._kill_session(sid)
+                try:
+                    async with self._lock:
+                        await self._kill_session(sid)
+                except Exception as exc:
+                    logger.error("HLS cleanup error for %s: %s", sid, exc)
 
     # ── Watchdog (auto-restart + stall detection + YouTube refresh) ──────────
 

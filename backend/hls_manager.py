@@ -277,7 +277,7 @@ def _build_ffmpeg_multi_quality_args(stream, hls_dir: str, url: str, qualities: 
         "-f",                    "hls",
         "-hls_time",             str(stream.hls_time),
         "-hls_list_size",        str(stream.hls_list_size),
-        "-hls_flags",            "delete_segments+independent_segments",
+        "-hls_flags",            "delete_segments+omit_endlist",
         "-hls_segment_filename", os.path.join(hls_dir, "%v", "seg%05d.ts"),
         os.path.join(hls_dir, "%v", "stream.m3u8"),
     ]

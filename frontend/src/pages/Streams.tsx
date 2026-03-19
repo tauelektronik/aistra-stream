@@ -268,9 +268,11 @@ function StreamModal({ stream, onSave, onClose }: {
   const [categories, setCategories] = useState<string[]>([])
 
   useEffect(() => {
-    api.get('/api/categories')
+    const ctrl = new AbortController()
+    api.get('/api/categories', { signal: ctrl.signal })
       .then((r: any) => setCategories((r.data as any[]).map((c: any) => c.name)))
       .catch(() => {})
+    return () => ctrl.abort()
   }, [])
 
   useEffect(() => {
@@ -626,7 +628,7 @@ function RecordDialog({ streamName, onConfirm, onCancel }: {
           <button className="btn btn-ghost" onClick={onCancel}>Cancelar</button>
           <button
             className="btn btn-primary"
-            onClick={() => onConfirm(mode === 'timed' ? parseInt(minutes || '60') * 60 : null, label.trim())}
+            onClick={() => onConfirm(mode === 'timed' ? (parseInt(minutes) || 60) * 60 : null, label.trim())}
           >
             <FiCircle size={12} style={{ fill: 'currentColor' }} /> Gravar
           </button>
@@ -1066,10 +1068,14 @@ export default function Streams() {
   }, [streams])
 
   async function toggleAutoplay(s: Stream) {
-    if (s.enabled) {
-      await api.post(`/api/streams/${s.id}/stop`)
-    } else {
-      await api.post(`/api/streams/${s.id}/start`)
+    try {
+      if (s.enabled) {
+        await api.post(`/api/streams/${s.id}/stop`)
+      } else {
+        await api.post(`/api/streams/${s.id}/start`)
+      }
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || 'Erro ao alterar estado do stream')
     }
     load()
   }

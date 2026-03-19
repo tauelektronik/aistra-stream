@@ -411,6 +411,7 @@ async def api_delete_stream(
 @app.post("/api/streams/{stream_id}/start", status_code=200)
 async def api_start_stream(
     stream_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     actor=Depends(require_operator),
 ):
@@ -428,7 +429,7 @@ async def api_start_stream(
         logger.warning("api_start_stream: get_hls_dir error for %s: %s", stream_id, err)
     audit.info("STREAM_START actor=%s id=%s ip=%s",
                actor.username, stream_id,
-               "api")
+               request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
     return {"status": "running", "enabled": True}
 
 

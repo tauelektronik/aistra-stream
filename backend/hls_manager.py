@@ -668,7 +668,10 @@ class HLSManager:
             "-c:a", "copy",
             "-bsf:a", "aac_adtstoasc",   # ADTS→raw AAC required for TS→MP4
             "-avoid_negative_ts", "make_zero",
-            "-movflags", "+faststart",
+            # Fragmented MP4: writes moov atoms incrementally so the file is
+            # always valid even if recording is stopped before natural end.
+            # faststart is incompatible with fragmented mode.
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
         ]
         if duration_s:
             ff_args += ["-t", str(duration_s)]

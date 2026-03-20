@@ -662,8 +662,12 @@ class HLSManager:
 
         ff_args = [
             FFMPEG, "-hide_banner", "-y",
+            "-fflags", "+discardcorrupt",
             "-i", playlist,
-            "-c", "copy",
+            "-c:v", "copy",
+            "-c:a", "copy",
+            "-bsf:a", "aac_adtstoasc",   # ADTS→raw AAC required for TS→MP4
+            "-avoid_negative_ts", "make_zero",
             "-movflags", "+faststart",
         ]
         if duration_s:

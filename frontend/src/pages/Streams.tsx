@@ -647,6 +647,7 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState('')
   const [downloading, setDl]    = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
 
   // Schedules tab state
   const [schedules, setSchedules]       = useState<any[]>([])
@@ -717,6 +718,17 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
 
   function repeatLabel(r: string) {
     return r === 'daily' ? 'Diário' : r === 'weekly' ? 'Semanal' : 'Uma vez'
+  }
+
+  async function deleteRecording(filename: string) {
+    if (!confirm(`Excluir "${filename}"?`)) return
+    setDeleting(filename)
+    try {
+      await api.delete(`/api/recordings/${filename}`)
+      setRecs(prev => prev.filter(r => r.filename !== filename))
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || 'Erro ao excluir gravação')
+    } finally { setDeleting(null) }
   }
 
   async function download(filename: string) {
@@ -793,7 +805,7 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
                       <td style={{ padding: '8px 8px', textAlign: 'right', color: 'var(--text3)', fontSize: 11 }}>
                         {new Date(r.created_at).toLocaleString('pt-BR')}
                       </td>
-                      <td style={{ padding: '8px 8px', textAlign: 'right' }}>
+                      <td style={{ padding: '8px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                         <button
                           className="btn btn-ghost btn-sm"
                           title="Baixar"
@@ -801,6 +813,15 @@ function RecordingsModal({ onClose }: { onClose: () => void }) {
                           onClick={() => download(r.filename)}
                         >
                           {downloading === r.filename ? '…' : <FiDownload size={12} />}
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          title="Excluir"
+                          disabled={deleting === r.filename}
+                          onClick={() => deleteRecording(r.filename)}
+                          style={{ color: 'var(--danger)', marginLeft: 4 }}
+                        >
+                          {deleting === r.filename ? '…' : <FiTrash2 size={12} />}
                         </button>
                       </td>
                     </tr>
@@ -1094,8 +1115,12 @@ export default function Streams() {
   }
 
   async function stopRecord(id: string) {
-    await api.delete(`/api/streams/${id}/record`)
-    setRecording(prev => ({ ...prev, [id]: false }))
+    try {
+      await api.delete(`/api/streams/${id}/record`)
+      setRecording(prev => ({ ...prev, [id]: false }))
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || 'Erro ao parar gravação')
+    }
   }
 
   async function startRecord(id: string) {
@@ -1352,8 +1377,8 @@ export default function Streams() {
                           <FiSlash size={10} />
                           <span>
                             IP/conta banida pelo provedor
-                            {stats[s.id].ban_http_code > 0 && ` (HTTP ${stats[s.id].ban_http_code})`}
-                            {stats[s.id].ban_count > 1 && ` · ${stats[s.id].ban_count}×`}
+                            {(stats[s.id]?.ban_http_code ?? 0) > 0 && ` (HTTP ${stats[s.id]?.ban_http_code})`}
+                            {(stats[s.id]?.ban_count ?? 0) > 1 && ` · ${stats[s.id]?.ban_count}×`}
                           </span>
                         </div>
                       )}

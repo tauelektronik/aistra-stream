@@ -101,8 +101,8 @@ async def lifespan(app: FastAPI):
     await init_db()
     hls_manager.startup_cleanup()
     hls_manager.start_background_cleanup()
-    asyncio.create_task(_server_stats_updater())
-    asyncio.create_task(_login_attempts_cleanup())
+    _stats_task   = asyncio.create_task(_server_stats_updater())
+    _cleanup_task = asyncio.create_task(_login_attempts_cleanup())
     await _ensure_default_admin()
     # Apply persisted settings
     _s = _load_settings()
@@ -113,6 +113,9 @@ async def lifespan(app: FastAPI):
     logger.info("aistra-stream started")
     asyncio.create_task(_autostart_enabled_streams())
     yield
+    _stats_task.cancel()
+    _cleanup_task.cancel()
+    await asyncio.gather(_stats_task, _cleanup_task, return_exceptions=True)
     await hls_manager.shutdown()
     logger.info("aistra-stream stopped")
 
@@ -1127,11 +1130,8 @@ async def api_delete_schedule(
         raise HTTPException(status_code=404, detail="Agendamento não encontrado")
 
 
-@app.get("/api/recordings/{filename}")
-async def api_download_recording(
-    filename: str,
-    _=Depends(require_operator),
-):
+def _resolve_recording_path(filename: str) -> str:
+    """Validate filename and return the real path. Raises HTTPException on error."""
     if re.search(r"[^a-zA-Z0-9_\-.]", filename) or ".." in filename:
         raise HTTPException(status_code=400, detail="Nome inválido")
     from backend.hls_manager import RECORDINGS_BASE
@@ -1140,10 +1140,31 @@ async def api_download_recording(
     real_path = os.path.realpath(path)
     if not real_path.startswith(real_base + os.sep):
         raise HTTPException(status_code=400, detail="Nome inválido")
+    return real_path
+
+
+@app.get("/api/recordings/{filename}")
+async def api_download_recording(
+    filename: str,
+    _=Depends(require_operator),
+):
+    real_path = _resolve_recording_path(filename)
     if not os.path.exists(real_path):
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     return FileResponse(real_path, media_type="video/mp4",
                         headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.delete("/api/recordings/{filename}", status_code=204)
+async def api_delete_recording(
+    filename: str,
+    actor=Depends(require_operator),
+):
+    real_path = _resolve_recording_path(filename)
+    if not os.path.exists(real_path):
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+    os.remove(real_path)
+    audit.info("RECORDING_DELETE actor=%s filename=%s", actor.username, filename)
 
 
 @app.get("/api/streams/{stream_id}/thumbnail")

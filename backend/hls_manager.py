@@ -953,9 +953,14 @@ class HLSManager:
         sid = _safe_id(stream.id)
         os.makedirs(PIPE_BASE, exist_ok=True)
 
+        # Remove all leftover files/pipes for this stream ID so n_m3u8dl
+        # does not append ".copy" suffix to output names on restart
+        import glob as _glob
+        for _f in _glob.glob(os.path.join(PIPE_BASE, f"{sid}.*")):
+            try: os.unlink(_f)
+            except Exception: pass
+
         fifo_path = os.path.join(PIPE_BASE, f"{sid}.ts")
-        if os.path.exists(fifo_path):
-            os.unlink(fifo_path)
         os.mkfifo(fifo_path)
 
         tmp_cwd = os.path.join(TMP_BASE, sid)

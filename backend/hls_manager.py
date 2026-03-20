@@ -664,13 +664,14 @@ class HLSManager:
             FFMPEG, "-hide_banner", "-y",
             "-fflags", "+discardcorrupt",
             "-i", playlist,
-            "-c:v", "copy",
-            "-c:a", "copy",
-            "-bsf:a", "aac_adtstoasc",   # ADTS→raw AAC required for TS→MP4
+            "-map", "0:v:0",        # first video stream
+            "-map", "0:a:0",        # first audio stream
+            "-c:v", "copy",         # video passthrough (no re-encode)
+            "-c:a", "aac",          # re-encode audio — avoids ADTS/BSF issues
+            "-b:a", "192k",
             "-avoid_negative_ts", "make_zero",
             # Fragmented MP4: writes moov atoms incrementally so the file is
             # always valid even if recording is stopped before natural end.
-            # faststart is incompatible with fragmented mode.
             "-movflags", "frag_keyframe+empty_moov+default_base_moof",
         ]
         if duration_s:

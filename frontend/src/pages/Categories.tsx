@@ -75,6 +75,23 @@ function CategoryModal({
   }
 
   function onUrlChange(v: string) {
+    // Auto-detect base64 data URI — convert to File and switch to upload mode
+    if (v.startsWith('data:image')) {
+      try {
+        const [header, b64] = v.split(',')
+        const mime = header.match(/data:(image\/[^;]+)/)?.[1] ?? 'image/jpeg'
+        const ext  = mime.split('/')[1].replace('svg+xml', 'svg')
+        const bin  = atob(b64)
+        const arr  = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
+        const file = new File([arr], `logo.${ext}`, { type: mime })
+        setLogoMode('file')
+        setLogoFile(file)
+        setPreview(URL.createObjectURL(file))
+        setLogoUrl('')
+      } catch { /* ignore malformed base64 */ }
+      return
+    }
     setLogoUrl(v)
     setPreview(v.startsWith('http') ? v : null)
   }

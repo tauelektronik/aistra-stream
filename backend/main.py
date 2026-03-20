@@ -824,7 +824,6 @@ async def api_delete_logo(
 async def api_get_logo(
     cat_id: int,
     db: AsyncSession = Depends(get_db),
-    _=Depends(get_current_user),
 ):
     cat = await get_category(db, cat_id)
     if not cat or not cat.logo_path:

@@ -527,7 +527,7 @@ class HLSManager:
 
             hls_dir    = os.path.join(HLS_BASE, sid)
             active_url, _ = self._get_active_url(stream)
-            is_cenc    = (str(stream.drm_type).replace("-", "_") == "cenc_ctr") and (
+            is_cenc    = (stream.drm_type == "cenc_ctr") and (
                 stream.drm_keys or (stream.drm_kid and stream.drm_key)
             )
             self._starting.add(sid)   # prevent duplicate concurrent starts

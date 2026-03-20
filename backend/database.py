@@ -55,10 +55,22 @@ async def run_migrations():
     migrations = [
         # v1.1 — channel number per stream
         "ALTER TABLE streams ADD COLUMN channel_num INT NULL UNIQUE",
-        # v1.2 — bump hls_time/hls_list_size to new defaults (15s × 15 segments)
-        # Only updates streams still on the old defaults to avoid overriding custom values
+        # v1.2 — bump hls defaults
         "UPDATE streams SET hls_time=15 WHERE hls_time=4",
         "UPDATE streams SET hls_list_size=15 WHERE hls_list_size=8",
+        # v1.3 — multi-key DRM, network/proxy fields, ABR output
+        "ALTER TABLE streams ADD COLUMN drm_keys TEXT NULL",
+        "ALTER TABLE streams ADD COLUMN audio_track INT NOT NULL DEFAULT 0",
+        "ALTER TABLE streams ADD COLUMN output_rtmp VARCHAR(500) NULL",
+        "ALTER TABLE streams ADD COLUMN output_udp VARCHAR(200) NULL",
+        "ALTER TABLE streams ADD COLUMN output_qualities VARCHAR(50) NULL",
+        "ALTER TABLE streams ADD COLUMN proxy VARCHAR(500) NULL",
+        "ALTER TABLE streams ADD COLUMN user_agent VARCHAR(500) NULL",
+        "ALTER TABLE streams ADD COLUMN backup_urls TEXT NULL",
+        "ALTER TABLE streams ADD COLUMN category VARCHAR(100) NULL",
+        # v1.4 — fix drm_type ENUM to use underscore (cenc_ctr not cenc-ctr)
+        "ALTER TABLE streams MODIFY COLUMN drm_type ENUM('none','cenc_ctr') NOT NULL DEFAULT 'none'",
+        "UPDATE streams SET drm_type='cenc_ctr' WHERE drm_type='cenc-ctr'",
     ]
     async with engine.begin() as conn:
         for sql in migrations:

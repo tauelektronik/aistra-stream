@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS streams (
     url              TEXT         NOT NULL,
 
     -- DRM
-    drm_type         ENUM('none','cenc-ctr') NOT NULL DEFAULT 'none',
+    drm_type         ENUM('none','cenc_ctr') NOT NULL DEFAULT 'none',
     drm_keys         TEXT         NULL,          -- "KID:KEY\nKID:KEY\n..." (CDM format)
     drm_kid          VARCHAR(64)  NULL,           -- legacy single KID
     drm_key          VARCHAR(64)  NULL,           -- legacy single KEY

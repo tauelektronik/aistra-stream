@@ -375,9 +375,9 @@ function StreamModal({ stream, onSave, onClose }: {
               <Sel form={form} set={set} k="stream_type" opts={[['live','Ao vivo'],['vod','VOD / Arquivo']]} />
             </Row>
             <Row label="DRM">
-              <Sel form={form} set={set} k="drm_type" opts={[['none','Sem DRM'],['cenc-ctr','CENC-CTR (Disney+, etc.)']]} />
+              <Sel form={form} set={set} k="drm_type" opts={[['none','Sem DRM'],['cenc_ctr','CENC-CTR (Disney+, etc.)']]} />
             </Row>
-            {form.drm_type === 'cenc-ctr' && <>
+            {form.drm_type === 'cenc_ctr' && <>
               <Row label="Keys / CDM Script" hint="Um par KID:KEY por linha — formato de saída de CDM tools">
                 <textarea
                   rows={5}
@@ -1367,7 +1367,7 @@ export default function Streams() {
                         )}
                         <span>· 🔊 {s.audio_codec}{s.audio_codec !== 'copy' ? ` ${s.audio_bitrate}` : ''}</span>
                         {s.buffer_seconds && <span>· ⏳ buf {s.buffer_seconds}s</span>}
-                        {s.drm_type === 'cenc-ctr' && (
+                        {s.drm_type === 'cenc_ctr' && (
                           <span style={{ color:'#818cf8' }}>· 🔐 DRM</span>
                         )}
                       </div>

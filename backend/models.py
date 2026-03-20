@@ -27,7 +27,7 @@ class StreamType(str, enum.Enum):
 
 class DrmType(str, enum.Enum):
     none     = "none"
-    cenc_ctr = "cenc-ctr"
+    cenc_ctr = "cenc_ctr"
 
 
 class VideoCodec(str, enum.Enum):

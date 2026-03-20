@@ -7,25 +7,34 @@ services:
     ports:
       - "8001:8001"
     environment:
-      # Database
-      - DB_HOST=db
-      - DB_PORT=3306
-      - DB_USER=aistra
-      - DB_PASS=aistra_pass
-      - DB_NAME=aistra_stream
-      # JWT
-      - SECRET_KEY=change_me_in_production
-      # Telegram (optional)
+      # Database — usa o serviço "db" abaixo como host
+      - DATABASE_URL=mysql+aiomysql://aistra:aistra_pass@db:3306/aistra_stream
+      # JWT — OBRIGATÓRIO: troque por uma chave gerada com:
+      #   python3 -c "import secrets; print(secrets.token_hex(32))"
+      - SECRET_KEY=TROQUE_ESTA_CHAVE_POR_UMA_SEGURA_32CHARS_MINIMO
+      # Streaming tools (instalados no Dockerfile)
+      - FFMPEG=/usr/bin/ffmpeg
+      - N_M3U8DL=/usr/local/bin/n_m3u8dl
+      - MP4DECRYPT=/usr/local/bin/mp4decrypt
+      - YTDLP=/usr/local/bin/yt-dlp
+      - YTDLP_COOKIES=/opt/youtube_cookies.txt
+      # Directories
+      - HLS_BASE=/tmp/aistra_stream_hls
+      - PIPE_BASE=/tmp/aistra_stream_pipes
+      - TMP_BASE=/tmp/aistra_stream_tmp
+      - THUMBNAILS_BASE=/tmp/aistra_thumbnails
+      - RECORDINGS_BASE=/data/recordings
+      - LOGOS_BASE=/data/logos
+      # Telegram (opcional)
       - TELEGRAM_BOT_TOKEN=
       - TELEGRAM_CHAT_ID=
-      # Watchdog
-      - HLS_MAX_RESTARTS=5
-      - HLS_RESTART_DELAY=15
-      # CORS (add your domain)
+      # CORS — adicione seu domínio
       - ALLOWED_ORIGINS=http://localhost:8001
     volumes:
       - recordings:/data/recordings
-      - /opt/youtube_cookies.txt:/opt/youtube_cookies.txt:ro
+      - logos:/data/logos
+      # Descomente se tiver cookies do YouTube:
+      # - /opt/youtube_cookies.txt:/opt/youtube_cookies.txt:ro
     depends_on:
       db:
         condition: service_healthy
@@ -34,7 +43,7 @@ services:
     image: mysql:8.0
     restart: unless-stopped
     environment:
-      - MYSQL_ROOT_PASSWORD=root_pass
+      - MYSQL_ROOT_PASSWORD=root_pass_troque_em_producao
       - MYSQL_DATABASE=aistra_stream
       - MYSQL_USER=aistra
       - MYSQL_PASSWORD=aistra_pass
@@ -50,3 +59,4 @@ services:
 volumes:
   db_data:
   recordings:
+  logos:

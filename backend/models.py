@@ -89,8 +89,8 @@ class Stream(Base):
     audio_bitrate : Mapped[str]      = mapped_column(String(10), default="128k")
 
     # HLS settings
-    hls_time      : Mapped[int]      = mapped_column(Integer, default=4)   # segment duration (s)
-    hls_list_size : Mapped[int]      = mapped_column(Integer, default=30)  # segments in playlist
+    hls_time      : Mapped[int]      = mapped_column(Integer, default=15)  # segment duration (s)
+    hls_list_size : Mapped[int]      = mapped_column(Integer, default=15)  # segments in playlist
 
     # Player settings (sent to frontend)
     buffer_seconds: Mapped[int]      = mapped_column(Integer, default=20)  # target latency buffer (s)

@@ -334,9 +334,9 @@ create_env() {
         N_M3U8DL_PATH=$(command -v n_m3u8dl || echo "/usr/local/bin/n_m3u8dl")
         MP4DECRYPT_PATH=$(command -v mp4decrypt || echo "/usr/local/bin/mp4decrypt")
         YTDLP_PATH=$(command -v yt-dlp || echo "/usr/local/bin/yt-dlp")
+        sed -i "s|^FFMPEG=.*|FFMPEG=${FFMPEG_PATH}|" .env
         sed -i "s|^N_M3U8DL=.*|N_M3U8DL=${N_M3U8DL_PATH}|" .env
         sed -i "s|^MP4DECRYPT=.*|MP4DECRYPT=${MP4DECRYPT_PATH}|" .env
-        sed -i "s|^FFMPEG=.*|FFMPEG=${FFMPEG_PATH}|" .env
         sed -i "s|^YTDLP=.*|YTDLP=${YTDLP_PATH}|" .env
         # Diretórios persistentes (fora do /tmp)
         sed -i "s|^RECORDINGS_BASE=.*|RECORDINGS_BASE=${PROJECT_DIR}/recordings|" .env
@@ -346,9 +346,13 @@ create_env() {
     else
         warn ".env já existe — mantendo configuração atual"
         # Garantir que novas variáveis existam no .env atual
-        grep -q "^RECORDINGS_BASE=" .env || echo "RECORDINGS_BASE=${PROJECT_DIR}/recordings" >> .env
-        grep -q "^THUMBNAILS_BASE=" .env || echo "THUMBNAILS_BASE=/tmp/aistra_thumbnails"    >> .env
-        grep -q "^LOGOS_BASE="      .env || echo "LOGOS_BASE=${PROJECT_DIR}/logos"            >> .env
+        grep -q "^RECORDINGS_BASE=" .env  || echo "RECORDINGS_BASE=${PROJECT_DIR}/recordings"  >> .env
+        grep -q "^THUMBNAILS_BASE=" .env  || echo "THUMBNAILS_BASE=/tmp/aistra_thumbnails"      >> .env
+        grep -q "^LOGOS_BASE="      .env  || echo "LOGOS_BASE=${PROJECT_DIR}/logos"              >> .env
+        grep -q "^YTDLP="           .env  || echo "YTDLP=$(command -v yt-dlp || echo /usr/local/bin/yt-dlp)" >> .env
+        grep -q "^YTDLP_COOKIES="   .env  || echo "YTDLP_COOKIES=/opt/youtube_cookies.txt"      >> .env
+        grep -q "^PIPE_BASE="       .env  || echo "PIPE_BASE=/tmp/aistra_stream_pipes"           >> .env
+        grep -q "^TMP_BASE="        .env  || echo "TMP_BASE=/tmp/aistra_stream_tmp"              >> .env
         ok ".env existente — novas variáveis adicionadas se ausentes"
     fi
 

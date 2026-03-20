@@ -66,9 +66,13 @@ fi
 
 # ── 3. Adicionar variáveis novas ao .env (se ausentes) ───────
 info "Verificando variáveis do .env..."
-grep -q "^RECORDINGS_BASE=" .env || echo "RECORDINGS_BASE=${PROJECT_DIR}/recordings" >> .env
-grep -q "^THUMBNAILS_BASE=" .env || echo "THUMBNAILS_BASE=/tmp/aistra_thumbnails"    >> .env
-grep -q "^LOGOS_BASE="      .env || echo "LOGOS_BASE=${PROJECT_DIR}/logos"            >> .env
+grep -q "^RECORDINGS_BASE=" .env  || echo "RECORDINGS_BASE=${PROJECT_DIR}/recordings"                   >> .env
+grep -q "^THUMBNAILS_BASE=" .env  || echo "THUMBNAILS_BASE=/tmp/aistra_thumbnails"                      >> .env
+grep -q "^LOGOS_BASE="      .env  || echo "LOGOS_BASE=${PROJECT_DIR}/logos"                             >> .env
+grep -q "^YTDLP="           .env  || echo "YTDLP=$(command -v yt-dlp || echo /usr/local/bin/yt-dlp)"   >> .env
+grep -q "^YTDLP_COOKIES="   .env  || echo "YTDLP_COOKIES=/opt/youtube_cookies.txt"                     >> .env
+grep -q "^PIPE_BASE="       .env  || echo "PIPE_BASE=/tmp/aistra_stream_pipes"                          >> .env
+grep -q "^TMP_BASE="        .env  || echo "TMP_BASE=/tmp/aistra_stream_tmp"                             >> .env
 mkdir -p "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos" "${PROJECT_DIR}/data"
 chmod 750 "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos" "${PROJECT_DIR}/data"
 ok ".env verificado"

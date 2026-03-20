@@ -15,7 +15,7 @@ from typing import Optional
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -747,6 +747,33 @@ async def api_upload_logo(
     return {"logo_path": filename}
 
 
+@app.put("/api/categories/{cat_id}/logo-url", status_code=200)
+async def api_set_logo_url(
+    cat_id: int,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_operator),
+):
+    """Set category logo from a remote URL (http/https)."""
+    url = (body.get("url") or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL não pode ser vazia")
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="URL deve começar com http:// ou https://")
+    if len(url) > 500:
+        raise HTTPException(status_code=400, detail="URL muito longa (máx 500 caracteres)")
+    cat = await get_category(db, cat_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    # Remove old uploaded file if it was a local file
+    if cat.logo_path and not cat.logo_path.startswith(("http://", "https://")):
+        try: os.unlink(os.path.join(LOGOS_BASE, cat.logo_path))
+        except OSError: pass
+    cat.logo_path = url
+    await db.commit()
+    return {"logo_path": url}
+
+
 @app.delete("/api/categories/{cat_id}/logo", status_code=204)
 async def api_delete_logo(
     cat_id: int,
@@ -757,8 +784,10 @@ async def api_delete_logo(
     if not cat:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
     if cat.logo_path:
-        try: os.unlink(os.path.join(LOGOS_BASE, cat.logo_path))
-        except OSError: pass
+        # Only remove local files, not URLs
+        if not cat.logo_path.startswith(("http://", "https://")):
+            try: os.unlink(os.path.join(LOGOS_BASE, cat.logo_path))
+            except OSError: pass
         cat.logo_path = None
         await db.commit()
 
@@ -772,10 +801,16 @@ async def api_get_logo(
     cat = await get_category(db, cat_id)
     if not cat or not cat.logo_path:
         raise HTTPException(status_code=404, detail="Logo não encontrado")
+    # Remote URL — redirect the browser directly to the source
+    if cat.logo_path.startswith(("http://", "https://")):
+        return RedirectResponse(cat.logo_path, status_code=302)
+    # Local uploaded file
     path = os.path.join(LOGOS_BASE, cat.logo_path)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
-    media = "image/svg+xml" if cat.logo_path.endswith(".svg") else "image/jpeg"
+    ext = cat.logo_path.rsplit(".", 1)[-1].lower()
+    media_types = {"svg": "image/svg+xml", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
+    media = media_types.get(ext, "image/jpeg")
     return FileResponse(path, media_type=media, headers={"Cache-Control": "max-age=3600"})
 
 

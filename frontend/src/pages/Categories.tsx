@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   FiPlus, FiEdit2, FiTrash2, FiX, FiUpload, FiImage,
-  FiCheckSquare, FiSquare, FiSave,
+  FiCheckSquare, FiSquare, FiSave, FiLink,
 } from 'react-icons/fi'
 import api from '../api'
 
@@ -30,11 +30,16 @@ function CategoryModal({
   onClose: () => void
 }) {
   const isNew = !cat
+  const existingIsUrl = cat?.logo_path?.startsWith('http')
   const [name, setName]           = useState(cat?.name ?? '')
   const [saving, setSaving]       = useState(false)
   const [error, setError]         = useState('')
+  const [logoMode, setLogoMode]   = useState<'file'|'url'>(existingIsUrl ? 'url' : 'file')
+  const [logoUrl, setLogoUrl]     = useState(existingIsUrl ? (cat?.logo_path ?? '') : '')
   const [logoPreview, setPreview] = useState<string | null>(
-    cat?.logo_path ? `/api/categories/${cat.id}/logo` : null
+    cat?.logo_path
+      ? (existingIsUrl ? cat.logo_path : `/api/categories/${cat.id}/logo`)
+      : null
   )
   const [logoFile, setLogoFile]   = useState<File | null>(null)
   const [selected, setSelected]   = useState<Set<string>>(
@@ -48,6 +53,16 @@ function CategoryModal({
     return () => document.removeEventListener('keydown', h)
   }, [onClose])
 
+  function switchMode(m: 'file'|'url') {
+    setLogoMode(m)
+    setLogoFile(null)
+    if (m === 'url') {
+      setPreview(logoUrl || null)
+    } else {
+      setPreview(cat?.logo_path && !existingIsUrl ? `/api/categories/${cat.id}/logo` : null)
+    }
+  }
+
   function pickLogo(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
     if (!f) return
@@ -57,6 +72,11 @@ function CategoryModal({
       return URL.createObjectURL(f)
     })
     e.target.value = ''
+  }
+
+  function onUrlChange(v: string) {
+    setLogoUrl(v)
+    setPreview(v.startsWith('http') ? v : null)
   }
 
   function toggleStream(id: string) {
@@ -78,18 +98,22 @@ function CategoryModal({
       } else {
         await api.put(`/api/categories/${catId}`, { name: name.trim() })
       }
-      // Upload logo if changed
-      if (logoFile && catId) {
-        const fd = new FormData()
-        fd.append('file', logoFile)
-        const logoRes = await fetch(`/api/categories/${catId}/logo`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-          body: fd,
-        })
-        if (!logoRes.ok) {
-          const msg = await logoRes.text().catch(() => '')
-          throw new Error(`Erro ao enviar logo: ${logoRes.status}${msg ? ' — ' + msg : ''}`)
+      // Save logo — file upload or URL
+      if (catId !== undefined) {
+        if (logoMode === 'url' && logoUrl.trim()) {
+          await api.put(`/api/categories/${catId}/logo-url`, { url: logoUrl.trim() })
+        } else if (logoMode === 'file' && logoFile) {
+          const fd = new FormData()
+          fd.append('file', logoFile)
+          const logoRes = await fetch(`/api/categories/${catId}/logo`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+            body: fd,
+          })
+          if (!logoRes.ok) {
+            const msg = await logoRes.text().catch(() => '')
+            throw new Error(`Erro ao enviar logo: ${logoRes.status}${msg ? ' — ' + msg : ''}`)
+          }
         }
       }
       // Assign streams
@@ -122,43 +146,89 @@ function CategoryModal({
         <div className="modal-body">
           {/* Name + Logo */}
           <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', marginBottom: 20 }}>
-            {/* Logo picker */}
-            <div
-              onClick={() => fileRef.current?.click()}
-              style={{
-                width: 72, height: 72, borderRadius: 10, flexShrink: 0,
-                border: '2px dashed var(--border)', cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: 'var(--bg3)', overflow: 'hidden', position: 'relative',
-              }}
-              title="Clique para enviar logo (PNG, JPG, SVG, WEBP — máx 2MB)"
-            >
-              {logoPreview
-                ? <img src={logoPreview} alt="logo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                : <FiImage size={22} color="var(--text3)" />
-              }
-              <div style={{
-                position: 'absolute', inset: 0, background: 'rgba(0,0,0,.45)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                opacity: 0, transition: '.15s',
-              }}
-                onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-                onMouseLeave={e => (e.currentTarget.style.opacity = '0')}
+            {/* Logo preview box */}
+            <div style={{ flexShrink: 0 }}>
+              <div
+                onClick={() => logoMode === 'file' && fileRef.current?.click()}
+                style={{
+                  width: 72, height: 72, borderRadius: 10,
+                  border: '2px dashed var(--border)',
+                  cursor: logoMode === 'file' ? 'pointer' : 'default',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: 'var(--bg3)', overflow: 'hidden', position: 'relative',
+                }}
+                title={logoMode === 'file' ? 'Clique para enviar logo (PNG, JPG, SVG, WEBP — máx 2MB)' : ''}
               >
-                <FiUpload size={18} color="#fff" />
+                {logoPreview
+                  ? <img src={logoPreview} alt="logo"
+                      style={{ width: '100%', height: '100%', objectFit: 'contain', padding: 4 }}
+                      onError={() => setPreview(null)}
+                    />
+                  : <FiImage size={22} color="var(--text3)" />
+                }
+                {logoMode === 'file' && (
+                  <div style={{
+                    position: 'absolute', inset: 0, background: 'rgba(0,0,0,.45)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    opacity: 0, transition: '.15s',
+                  }}
+                    onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                    onMouseLeave={e => (e.currentTarget.style.opacity = '0')}
+                  >
+                    <FiUpload size={18} color="#fff" />
+                  </div>
+                )}
+              </div>
+              {/* Mode toggle */}
+              <div style={{ display: 'flex', marginTop: 6, borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
+                <button
+                  type="button"
+                  onClick={() => switchMode('file')}
+                  style={{
+                    flex: 1, padding: '3px 0', fontSize: 11, border: 'none', cursor: 'pointer',
+                    background: logoMode === 'file' ? 'var(--accent)' : 'var(--bg2)',
+                    color: logoMode === 'file' ? '#fff' : 'var(--text3)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
+                  }}
+                  title="Upload de arquivo"
+                ><FiUpload size={10} /> Arquivo</button>
+                <button
+                  type="button"
+                  onClick={() => switchMode('url')}
+                  style={{
+                    flex: 1, padding: '3px 0', fontSize: 11, border: 'none', cursor: 'pointer',
+                    background: logoMode === 'url' ? 'var(--accent)' : 'var(--bg2)',
+                    color: logoMode === 'url' ? '#fff' : 'var(--text3)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
+                  }}
+                  title="URL da imagem"
+                ><FiLink size={10} /> URL</button>
               </div>
             </div>
             <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={pickLogo} />
 
-            {/* Name field */}
-            <div className="form-group" style={{ flex: 1, margin: 0 }}>
-              <label style={{ fontWeight: 500 }}>Nome da Categoria</label>
-              <input
-                value={name}
-                onChange={e => setName(e.target.value)}
-                placeholder="Ex: Esportes, Notícias, Filmes…"
-                autoFocus
-              />
+            {/* Name + URL input */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label style={{ fontWeight: 500 }}>Nome da Categoria</label>
+                <input
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  placeholder="Ex: Esportes, Notícias, Filmes…"
+                  autoFocus
+                />
+              </div>
+              {logoMode === 'url' && (
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label style={{ fontWeight: 500 }}>URL do Logo</label>
+                  <input
+                    value={logoUrl}
+                    onChange={e => onUrlChange(e.target.value)}
+                    placeholder="https://exemplo.com/logo.png"
+                    type="url"
+                  />
+                </div>
+              )}
             </div>
           </div>
 
@@ -300,7 +370,9 @@ export default function Categories() {
                 }}>
                   {cat.logo_path ? (
                     <img
-                      src={`/api/categories/${cat.id}/logo?t=${cat.logo_path}`}
+                      src={cat.logo_path.startsWith('http')
+                        ? cat.logo_path
+                        : `/api/categories/${cat.id}/logo?t=${cat.logo_path}`}
                       alt={cat.name}
                       style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain', padding: 8 }}
                     />

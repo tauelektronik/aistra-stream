@@ -30,16 +30,13 @@ function CategoryModal({
   onClose: () => void
 }) {
   const isNew = !cat
-  const existingIsUrl = cat?.logo_path?.startsWith('http')
   const [name, setName]           = useState(cat?.name ?? '')
   const [saving, setSaving]       = useState(false)
   const [error, setError]         = useState('')
-  const [logoMode, setLogoMode]   = useState<'file'|'url'>(existingIsUrl ? 'url' : 'file')
-  const [logoUrl, setLogoUrl]     = useState(existingIsUrl ? (cat?.logo_path ?? '') : '')
+  const [logoMode, setLogoMode]   = useState<'file'|'url'>('file')
+  const [logoUrl, setLogoUrl]     = useState('')
   const [logoPreview, setPreview] = useState<string | null>(
-    cat?.logo_path
-      ? (existingIsUrl ? cat.logo_path : `/api/categories/${cat.id}/logo`)
-      : null
+    cat?.logo_path ? `/api/categories/${cat.id}/logo` : null
   )
   const [logoFile, setLogoFile]   = useState<File | null>(null)
   const [selected, setSelected]   = useState<Set<string>>(
@@ -59,7 +56,7 @@ function CategoryModal({
     if (m === 'url') {
       setPreview(logoUrl || null)
     } else {
-      setPreview(cat?.logo_path && !existingIsUrl ? `/api/categories/${cat.id}/logo` : null)
+      setPreview(cat?.logo_path ? `/api/categories/${cat.id}/logo` : null)
     }
   }
 
@@ -387,9 +384,7 @@ export default function Categories() {
                 }}>
                   {cat.logo_path ? (
                     <img
-                      src={cat.logo_path.startsWith('http')
-                        ? cat.logo_path
-                        : `/api/categories/${cat.id}/logo?t=${cat.logo_path}`}
+                      src={`/api/categories/${cat.id}/logo?t=${cat.logo_path}`}
                       alt={cat.name}
                       style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain', padding: 8 }}
                     />

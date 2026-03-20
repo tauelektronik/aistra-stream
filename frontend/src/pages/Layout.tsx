@@ -19,6 +19,16 @@ export default function Layout() {
     () => location.pathname.startsWith('/streams')
   )
   const [cats, setCats] = useState<Category[]>([])
+  const [logoSize, setLogoSize] = useState<number>(
+    () => Number(localStorage.getItem('sidebar_logo_size') || 22)
+  )
+
+  // Listen for logo size changes from Settings page
+  useEffect(() => {
+    const handler = () => setLogoSize(Number(localStorage.getItem('sidebar_logo_size') || 22))
+    window.addEventListener('sidebar_logo_size', handler)
+    return () => window.removeEventListener('sidebar_logo_size', handler)
+  }, [])
 
   // Apply/persist theme
   useEffect(() => {
@@ -115,10 +125,10 @@ export default function Layout() {
                     <img
                       src={`/api/categories/${cat.id}/logo?t=${cat.logo_path}`}
                       alt=""
-                      style={{ width: 14, height: 14, objectFit: 'contain', borderRadius: 2, flexShrink: 0 }}
+                      style={{ width: logoSize, height: logoSize, objectFit: 'contain', borderRadius: 3, flexShrink: 0 }}
                     />
                   ) : (
-                    <FiTag size={12} style={{ flexShrink: 0, color: 'var(--text3)' }} />
+                    <FiTag size={Math.max(12, logoSize - 4)} style={{ flexShrink: 0, color: 'var(--text3)' }} />
                   )}
                   {cat.name}
                 </div>

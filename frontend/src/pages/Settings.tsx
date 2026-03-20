@@ -113,6 +113,15 @@ export default function Settings() {
   const [saving, setSaving]   = useState(false)
   const [saved, setSaved]     = useState(false)
   const [error, setError]     = useState('')
+  const [logoSize, setLogoSize] = useState<number>(
+    () => Number(localStorage.getItem('sidebar_logo_size') || 22)
+  )
+
+  function changeLogoSize(v: number) {
+    setLogoSize(v)
+    localStorage.setItem('sidebar_logo_size', String(v))
+    window.dispatchEvent(new Event('sidebar_logo_size'))
+  }
 
   // Backup / restore state
   const [downloading, setDownloading]   = useState(false)
@@ -209,6 +218,22 @@ export default function Settings() {
       </div>
 
       <div className="page-content" style={{ maxWidth: 640 }}>
+
+        {/* Interface */}
+        <div className="card" style={{ padding: 24, marginBottom: 16 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Interface</h2>
+          <Row label="Tamanho dos logos na barra lateral" hint="Tamanho dos ícones de categoria exibidos no menu lateral.">
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                type="range" min={14} max={48} step={2}
+                value={logoSize}
+                onChange={e => changeLogoSize(Number(e.target.value))}
+                style={{ flex: 1, padding: 0, border: 'none', background: 'transparent', accentColor: 'var(--accent)' }}
+              />
+              <span style={{ minWidth: 38, color: 'var(--text2)', fontSize: 13 }}>{logoSize}px</span>
+            </div>
+          </Row>
+        </div>
 
         {/* Telegram Notifications */}
         <div className="card" style={{ padding: 24, marginBottom: 16 }}>

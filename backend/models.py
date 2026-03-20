@@ -50,6 +50,17 @@ class Category(Base):
     created_at : Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
+class ConnectionLog(Base):
+    __tablename__ = "connection_logs"
+
+    id         : Mapped[int]      = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username   : Mapped[str]      = mapped_column(String(50), nullable=False, index=True)
+    ip         : Mapped[str]      = mapped_column(String(64), nullable=False)
+    user_agent : Mapped[str|None] = mapped_column(String(500), nullable=True)
+    success    : Mapped[bool]     = mapped_column(Boolean, nullable=False)
+    created_at : Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+
 class User(Base):
     __tablename__ = "users"
 

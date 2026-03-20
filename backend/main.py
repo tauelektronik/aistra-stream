@@ -23,6 +23,7 @@ from backend.auth import (
     create_access_token, get_current_user, require_admin, require_operator,
     verify_password,
 )
+from backend.models import ConnectionLog
 from backend.crud import (
     create_stream, create_user, delete_stream, delete_user, get_stream,
     get_user_by_username, list_streams, list_users, update_stream, update_user,
@@ -217,13 +218,57 @@ async def security_headers(request: Request, call_next):
 async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     # Rate limit by IP
     client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
+    if "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
     _check_rate_limit(client_ip)
 
+    ua = request.headers.get("User-Agent", "")[:500]
     user = await get_user_by_username(db, body.username)
-    if not user or not verify_password(body.password, user.password_hash) or not user.active:
+    ok = bool(user and verify_password(body.password, user.password_hash) and user.active)
+
+    # Always record the attempt
+    db.add(ConnectionLog(username=body.username, ip=client_ip, user_agent=ua, success=ok))
+    await db.commit()
+
+    if not ok:
         raise HTTPException(status_code=401, detail="Usuário ou senha incorretos")
     token = create_access_token({"sub": user.username, "role": user.role})
     return TokenResponse(access_token=token)
+
+
+@app.get("/api/connection-logs")
+async def api_connection_logs(
+    limit: int = 200,
+    username: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    import sqlalchemy as sa
+    q = sa.select(ConnectionLog).order_by(ConnectionLog.created_at.desc()).limit(min(limit, 1000))
+    if username:
+        q = q.where(ConnectionLog.username == username)
+    rows = (await db.execute(q)).scalars().all()
+    return [
+        {
+            "id": r.id,
+            "username": r.username,
+            "ip": r.ip,
+            "user_agent": r.user_agent,
+            "success": r.success,
+            "created_at": r.created_at.isoformat() + "Z",
+        }
+        for r in rows
+    ]
+
+
+@app.delete("/api/connection-logs", status_code=204)
+async def api_clear_connection_logs(
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    import sqlalchemy as sa
+    await db.execute(sa.delete(ConnectionLog))
+    await db.commit()
 
 
 @app.get("/auth/me", response_model=UserOut)

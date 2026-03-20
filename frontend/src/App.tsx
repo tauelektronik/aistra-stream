@@ -5,7 +5,8 @@ import Dashboard from './pages/Dashboard'
 import Streams   from './pages/Streams'
 import Users     from './pages/Users'
 import Settings    from './pages/Settings'
-import Categories  from './pages/Categories'
+import Categories      from './pages/Categories'
+import ConnectionLogs  from './pages/ConnectionLogs'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   return localStorage.getItem('token') ? children : <Navigate to="/login" replace />
@@ -21,7 +22,8 @@ export default function App() {
         <Route path="streams"   element={<Streams />} />
         <Route path="users"     element={<Users />} />
         <Route path="settings"    element={<Settings />} />
-        <Route path="categories"  element={<Categories />} />
+        <Route path="categories"       element={<Categories />} />
+        <Route path="connection-logs"  element={<ConnectionLogs />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

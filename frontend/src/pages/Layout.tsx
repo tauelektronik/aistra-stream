@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { FiGrid, FiVideo, FiUsers, FiLogOut, FiRadio, FiSettings, FiChevronRight, FiTag, FiSun, FiMoon } from 'react-icons/fi'
+import { FiGrid, FiVideo, FiUsers, FiLogOut, FiRadio, FiSettings, FiChevronRight, FiTag, FiSun, FiMoon, FiActivity } from 'react-icons/fi'
 
 interface Category { id: number; name: string; logo_path: string | null }
 
@@ -13,7 +13,7 @@ export default function Layout() {
     () => (localStorage.getItem('theme') as 'dark'|'light') || 'dark'
   )
   const [configOpen, setConfigOpen]   = useState(
-    () => ['/settings', '/users', '/categories'].some(p => location.pathname.startsWith(p))
+    () => ['/settings', '/users', '/categories', '/connection-logs'].some(p => location.pathname.startsWith(p))
   )
   const [streamsOpen, setStreamsOpen] = useState(
     () => location.pathname.startsWith('/streams')
@@ -53,7 +53,7 @@ export default function Layout() {
 
   // Auto-expand sub-menus when navigating to child routes
   useEffect(() => {
-    if (['/settings', '/users', '/categories'].some(p => location.pathname.startsWith(p))) {
+    if (['/settings', '/users', '/categories', '/connection-logs'].some(p => location.pathname.startsWith(p))) {
       setConfigOpen(true)
     }
     if (location.pathname.startsWith('/streams')) {
@@ -156,6 +156,9 @@ export default function Layout() {
                 </NavLink>
                 <NavLink to="/users" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
                   <FiUsers size={13} /> Usuários
+                </NavLink>
+                <NavLink to="/connection-logs" className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+                  <FiActivity size={13} /> Conexões
                 </NavLink>
               </div>
             </div>

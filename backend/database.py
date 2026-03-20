@@ -40,7 +40,7 @@ async def get_db():
 
 async def init_db():
     """Create all tables on startup (no-op if already exist)."""
-    from backend.models import User, Stream, Category  # noqa: F401
+    from backend.models import User, Stream, Category, ConnectionLog  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await run_migrations()

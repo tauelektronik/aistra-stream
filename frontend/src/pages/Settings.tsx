@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { FiSave, FiAlertCircle, FiDownload, FiUpload, FiCheckCircle, FiPlus, FiTrash2, FiChevronDown, FiChevronUp, FiList, FiRefreshCw, FiArchive } from 'react-icons/fi'
+import { FiSave, FiAlertCircle, FiDownload, FiUpload, FiCheckCircle, FiPlus, FiTrash2, FiChevronDown, FiChevronUp, FiList, FiRefreshCw, FiArchive, FiGitPullRequest } from 'react-icons/fi'
 import api from '../api'
 
 interface SettingsData {
@@ -153,6 +153,70 @@ export default function Settings() {
   const [m3uResult, setM3uResult]       = useState<{ created: number; updated: number; skipped: number; errors: number } | null>(null)
   const [m3uError, setM3uError]         = useState('')
   const m3uRef = useRef<HTMLInputElement>(null)
+
+  // Update state
+  type UpdateInfo = {
+    current: string
+    update_available: boolean | null
+    gh_token_configured: boolean
+    message?: string
+    latest?: string
+    latest_message?: string
+    latest_date?: string
+    latest_author?: string
+  }
+  const [updateInfo, setUpdateInfo]       = useState<UpdateInfo | null>(null)
+  const [updateChecking, setUpdateChecking] = useState(false)
+  const [updateApplying, setUpdateApplying] = useState(false)
+  const [updateLog, setUpdateLog]         = useState<string[]>([])
+  const [updateLogOpen, setUpdateLogOpen] = useState(false)
+  const [updateMsg, setUpdateMsg]         = useState('')
+  const updateLogRef = useRef<HTMLDivElement>(null)
+
+  async function checkUpdates() {
+    setUpdateChecking(true)
+    setUpdateInfo(null)
+    try {
+      const res = await api.get('/api/update/check')
+      setUpdateInfo(res.data)
+    } catch {
+      setUpdateInfo(null)
+    } finally {
+      setUpdateChecking(false)
+    }
+  }
+
+  async function applyUpdate() {
+    if (!confirm('Iniciar atualização?\n\nO painel ficará offline ~30 segundos enquanto o serviço reinicia.\nAposição a página irá recarregar automaticamente quando voltar.')) return
+    setUpdateApplying(true)
+    setUpdateMsg('')
+    setUpdateLog([])
+    setUpdateLogOpen(true)
+    try {
+      const res = await api.post('/api/update/apply')
+      setUpdateMsg(res.data.message)
+      // Poll log every 2s while applying, then reload when service comes back
+      let attempts = 0
+      const poll = setInterval(async () => {
+        attempts++
+        try {
+          const logRes = await api.get('/api/update/log')
+          setUpdateLog(logRes.data.lines || [])
+          if (updateLogRef.current) {
+            updateLogRef.current.scrollTop = updateLogRef.current.scrollHeight
+          }
+        } catch {
+          // service restarting — wait and reload
+          clearInterval(poll)
+          setTimeout(() => window.location.reload(), 5000)
+        }
+        if (attempts > 60) clearInterval(poll)
+      }, 2000)
+    } catch (e: any) {
+      setUpdateMsg(e.response?.data?.detail || 'Erro ao iniciar atualização')
+      setUpdateApplying(false)
+    }
+  }
 
   useEffect(() => {
     api.get('/api/settings')
@@ -677,6 +741,113 @@ export default function Settings() {
             <FiSave size={14} /> {saving ? 'Salvando…' : 'Salvar configurações'}
           </button>
           {saved && <span style={{ fontSize: 13, color: 'var(--success)' }}>✓ Salvo com sucesso</span>}
+        </div>
+
+        {/* ── Atualizações ──────────────────────────────────────────── */}
+        <div className="card" style={{ padding: 24, marginTop: 16 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <FiGitPullRequest size={16} /> Atualizações do Sistema
+          </h2>
+          <p style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 16 }}>
+            Verifica se há uma versão mais recente disponível no GitHub e aplica a atualização automaticamente.
+            Requer <code style={{ background: 'var(--bg4)', padding: '1px 5px', borderRadius: 4 }}>GH_TOKEN=ghp_xxxx</code> configurado no <code style={{ background: 'var(--bg4)', padding: '1px 5px', borderRadius: 4 }}>.env</code>.
+          </p>
+
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-ghost"
+              onClick={checkUpdates}
+              disabled={updateChecking || updateApplying}
+              style={{ gap: 6 }}
+            >
+              <FiRefreshCw size={14} className={updateChecking ? 'spin' : ''} />
+              {updateChecking ? 'Verificando…' : 'Verificar atualizações'}
+            </button>
+
+            {updateInfo?.update_available === true && (
+              <button
+                className="btn btn-primary"
+                onClick={applyUpdate}
+                disabled={updateApplying}
+                style={{ gap: 6 }}
+              >
+                <FiDownload size={14} />
+                {updateApplying ? 'Atualizando…' : 'Atualizar agora'}
+              </button>
+            )}
+          </div>
+
+          {/* Status card */}
+          {updateInfo && (
+            <div style={{
+              marginTop: 14, padding: '12px 14px', borderRadius: 8,
+              background: updateInfo.update_available === true
+                ? 'rgba(var(--accent-rgb,59,130,246),0.08)'
+                : updateInfo.update_available === false
+                ? 'rgba(var(--success-rgb,34,197,94),0.08)'
+                : 'var(--bg3)',
+              border: `1px solid ${updateInfo.update_available === true ? 'var(--accent)' : updateInfo.update_available === false ? 'var(--success)' : 'var(--border)'}`,
+              fontSize: 13,
+            }}>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <span>Versão atual: <strong>{updateInfo.current}</strong></span>
+                {updateInfo.latest && (
+                  <span>Última versão: <strong>{updateInfo.latest}</strong></span>
+                )}
+              </div>
+              {updateInfo.update_available === true && updateInfo.latest_message && (
+                <div style={{ marginTop: 6, color: 'var(--text2)' }}>
+                  <strong>Novidade:</strong> {updateInfo.latest_message}
+                  {updateInfo.latest_author && (
+                    <span style={{ color: 'var(--text3)', marginLeft: 8 }}>— {updateInfo.latest_author}</span>
+                  )}
+                </div>
+              )}
+              {updateInfo.update_available === false && (
+                <div style={{ marginTop: 4, color: 'var(--success)' }}>✓ O sistema está atualizado.</div>
+              )}
+              {updateInfo.update_available === null && updateInfo.message && (
+                <div style={{ marginTop: 4, color: 'var(--text3)' }}>{updateInfo.message}</div>
+              )}
+            </div>
+          )}
+
+          {/* Mensagem de início de update */}
+          {updateMsg && (
+            <div style={{ marginTop: 10, fontSize: 13, color: 'var(--accent)' }}>
+              ℹ️ {updateMsg}
+            </div>
+          )}
+
+          {/* Log expansível */}
+          {updateLogOpen && (
+            <div style={{ marginTop: 12 }}>
+              <button
+                onClick={() => setUpdateLogOpen(o => !o)}
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: 'var(--text3)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, marginBottom: 6,
+                }}
+              >
+                {updateLogOpen ? <FiChevronUp size={12} /> : <FiChevronDown size={12} />}
+                Log de atualização
+              </button>
+              <div
+                ref={updateLogRef}
+                style={{
+                  background: 'var(--bg1)', borderRadius: 6, padding: '10px 12px',
+                  fontFamily: 'monospace', fontSize: 11, maxHeight: 220,
+                  overflowY: 'auto', whiteSpace: 'pre-wrap', color: 'var(--text2)',
+                  border: '1px solid var(--border)',
+                }}
+              >
+                {updateLog.length > 0
+                  ? updateLog.join('')
+                  : <span style={{ color: 'var(--text3)' }}>Aguardando saída…</span>
+                }
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -35,6 +35,7 @@ from backend.routers import backup as backup_router
 from backend.routers import recordings as recordings_router
 from backend.routers import monitoring as monitoring_router
 from backend.routers import settings as settings_router
+from backend.routers import updater as updater_router
 from backend.routers.settings import _migrate_settings_from_file
 from backend.routers.monitoring import _server_stats_updater
 
@@ -288,6 +289,7 @@ app.include_router(backup_router.router)
 app.include_router(recordings_router.router)
 app.include_router(monitoring_router.router)
 app.include_router(settings_router.router)
+app.include_router(updater_router.router)
 
 
 # ── Serve React SPA ───────────────────────────────────────────────────────────

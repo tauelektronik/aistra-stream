@@ -72,127 +72,136 @@ function Chart({
 }: {
   series: Series[]; height?: number; yFmt?: (v: number) => string
 }) {
+  // SVG viewBox: full width W × H, no left padding — labels are HTML outside SVG
   const W = 500, H = height
-  const PL = 30, PR = 6, PT = 6, PB = 16
-  const cW = W - PL - PR, cH = H - PT - PB
+  const PT = 5, PB = 5           // top/bottom padding inside SVG
+  const LABEL_W = 42             // HTML label column width (px)
+  const cH = H - PT - PB
   const nPts = Math.max(...series.map(s => s.data.length), 2)
-  const xv = (i: number) => PL + (i / Math.max(nPts - 1, 1)) * cW
+  const xv = (i: number) => (i / Math.max(nPts - 1, 1)) * W
   const yv = (v: number) => PT + (1 - Math.min(Math.max(v, 0), 100) / 100) * cH
 
-  const gridVals = [0, 25, 50, 75, 100]
+  // Y-axis grid values and their % position inside the container
+  const gridVals = [100, 75, 50, 25, 0]
+  const yPct = (v: number) => ((PT + (1 - v / 100) * cH) / H) * 100
 
   return (
-    <svg
-      viewBox={`0 0 ${W} ${H}`}
-      preserveAspectRatio="none"
-      style={{ width: '100%', height, display: 'block' }}
-    >
-      <defs>
-        {/* Gradient fills per series */}
-        {series.filter(s => s.fill).map(s => (
-          <linearGradient key={s.id} id={`grad-${s.id}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%"   stopColor={s.color} stopOpacity="0.35" />
-            <stop offset="85%"  stopColor={s.color} stopOpacity="0.04" />
-            <stop offset="100%" stopColor={s.color} stopOpacity="0"    />
-          </linearGradient>
-        ))}
-        {/* Glow filter for bold lines */}
-        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur stdDeviation="2" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-        {/* Soft clip */}
-        <clipPath id="chart-clip">
-          <rect x={PL} y={PT} width={cW} height={cH} />
-        </clipPath>
-      </defs>
+    <div>
+      {/* Chart row: HTML labels + SVG side by side */}
+      <div style={{ display: 'flex', alignItems: 'stretch' }}>
 
-      {/* Chart background */}
-      <rect x={PL} y={PT} width={cW} height={cH}
-        fill="var(--bg)" rx="3"
-        stroke="var(--border)" strokeWidth="0.5"
-      />
+        {/* Y-axis labels — pure HTML, never stretched */}
+        <div style={{ position: 'relative', width: LABEL_W, flexShrink: 0, height }}>
+          {gridVals.map(v => (
+            <span key={v} style={{
+              position: 'absolute',
+              top: `${yPct(v)}%`,
+              right: 6,
+              transform: 'translateY(-50%)',
+              fontSize: 10,
+              color: 'var(--text3)',
+              fontFamily: 'monospace',
+              lineHeight: 1,
+              whiteSpace: 'nowrap',
+            }}>
+              {yFmt(v)}
+            </span>
+          ))}
+        </div>
 
-      {/* Horizontal grid lines — dotted */}
-      {gridVals.map(v => (
-        <g key={v}>
-          <line
-            x1={PL} y1={yv(v)} x2={W - PR} y2={yv(v)}
-            stroke="var(--border)"
-            strokeWidth={v === 0 || v === 100 ? '0.8' : '0.5'}
-            strokeDasharray={v === 0 || v === 100 ? 'none' : '3 4'}
+        {/* SVG chart area — only lines, fills and grid (no text) */}
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          preserveAspectRatio="none"
+          style={{ flex: 1, height, display: 'block' }}
+        >
+          <defs>
+            {series.filter(s => s.fill).map(s => (
+              <linearGradient key={s.id} id={`grad-${s.id}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%"   stopColor={s.color} stopOpacity="0.38" />
+                <stop offset="80%"  stopColor={s.color} stopOpacity="0.05" />
+                <stop offset="100%" stopColor={s.color} stopOpacity="0"    />
+              </linearGradient>
+            ))}
+            <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="2" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+            <clipPath id="chart-clip">
+              <rect x={0} y={PT} width={W} height={cH} />
+            </clipPath>
+          </defs>
+
+          {/* Background */}
+          <rect x={0} y={PT} width={W} height={cH}
+            fill="var(--bg)" rx="3"
+            stroke="var(--border)" strokeWidth="0.6"
           />
-          <text
-            x={PL - 3} y={yv(v) + 3.5}
-            textAnchor="end" fontSize="6.5" fill="var(--text3)"
-            fontFamily="monospace"
-          >
-            {yFmt(v)}
-          </text>
-        </g>
-      ))}
 
-      {/* Time axis hints */}
-      {nPts >= 4 && <>
-        <text x={PL + 3}   y={H - 3} fontSize="5.5" fill="var(--text3)">← 5 min</text>
-        <text x={W - PR - 2} y={H - 3} textAnchor="end" fontSize="5.5" fill="var(--text3)">agora</text>
-      </>}
-
-      {/* Data — fills first, then lines on top */}
-      <g clipPath="url(#chart-clip)">
-        {/* Fills */}
-        {series.filter(s => s.fill).map(s => {
-          const d = s.data.length === 1 ? [s.data[0], s.data[0]] : s.data
-          if (d.length < 2) return null
-          const pts: [number, number][] = d.map((v, i) => [xv(i), yv(v)])
-          const last = pts.length - 1
-          const fillD =
-            `M ${pts[0][0].toFixed(1)} ${yv(0).toFixed(1)} ` +
-            `L ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)} ` +
-            smoothPath(pts).replace(/^M [^ ]+ [^ ]+/, '') +
-            ` L ${pts[last][0].toFixed(1)} ${yv(0).toFixed(1)} Z`
-          return (
-            <path key={`fill-${s.id}`} d={fillD}
-              fill={`url(#grad-${s.id})`}
+          {/* Grid lines only — no text */}
+          {gridVals.map(v => (
+            <line key={v}
+              x1={0} y1={yv(v)} x2={W} y2={yv(v)}
+              stroke="var(--border)"
+              strokeWidth={v === 0 || v === 100 ? '0.8' : '0.45'}
+              strokeDasharray={v === 0 || v === 100 ? undefined : '4 5'}
             />
-          )
-        })}
+          ))}
 
-        {/* Lines */}
-        {series.map(s => {
-          const d = s.data.length === 1 ? [s.data[0], s.data[0]] : s.data
-          if (d.length < 2) return null
-          const pts: [number, number][] = d.map((v, i) => [xv(i), yv(v)])
-          return (
-            <path key={`line-${s.id}`}
-              d={smoothPath(pts)}
-              fill="none"
-              stroke={s.color}
-              strokeWidth={s.bold ? '2' : '1'}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              filter={s.bold ? 'url(#glow)' : undefined}
-              opacity={s.bold ? 1 : 0.75}
-            />
-          )
-        })}
+          {/* Fills + lines */}
+          <g clipPath="url(#chart-clip)">
+            {series.filter(s => s.fill).map(s => {
+              const d = s.data.length === 1 ? [s.data[0], s.data[0]] : s.data
+              if (d.length < 2) return null
+              const pts: [number, number][] = d.map((v, i) => [xv(i), yv(v)])
+              const last = pts.length - 1
+              const fillD =
+                `M ${pts[0][0].toFixed(1)} ${yv(0).toFixed(1)} ` +
+                `L ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)} ` +
+                smoothPath(pts).replace(/^M [^ ]+ [^ ]+/, '') +
+                ` L ${pts[last][0].toFixed(1)} ${yv(0).toFixed(1)} Z`
+              return <path key={`fill-${s.id}`} d={fillD} fill={`url(#grad-${s.id})`} />
+            })}
 
-        {/* Current value dot on last point of bold series */}
-        {series.filter(s => s.bold && s.data.length >= 1).map(s => {
-          const last = s.data.length - 1
-          return (
-            <circle key={`dot-${s.id}`}
-              cx={xv(last)} cy={yv(s.data[last])}
-              r="2.5" fill={s.color}
-              filter="url(#glow)"
-            />
-          )
-        })}
-      </g>
-    </svg>
+            {series.map(s => {
+              const d = s.data.length === 1 ? [s.data[0], s.data[0]] : s.data
+              if (d.length < 2) return null
+              const pts: [number, number][] = d.map((v, i) => [xv(i), yv(v)])
+              return (
+                <path key={`line-${s.id}`}
+                  d={smoothPath(pts)}
+                  fill="none"
+                  stroke={s.color}
+                  strokeWidth={s.bold ? '2' : '1'}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  filter={s.bold ? 'url(#glow)' : undefined}
+                  opacity={s.bold ? 1 : 0.7}
+                />
+              )
+            })}
+
+            {series.filter(s => s.bold && s.data.length >= 1).map(s => (
+              <circle key={`dot-${s.id}`}
+                cx={xv(s.data.length - 1)} cy={yv(s.data[s.data.length - 1])}
+                r="2.5" fill={s.color} filter="url(#glow)"
+              />
+            ))}
+          </g>
+        </svg>
+      </div>
+
+      {/* Time labels below — pure HTML, never stretched */}
+      {nPts >= 4 && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginLeft: LABEL_W, marginTop: 3 }}>
+          <span style={{ fontSize: 10, color: 'var(--text3)' }}>← 5 min</span>
+          <span style={{ fontSize: 10, color: 'var(--text3)' }}>agora</span>
+        </div>
+      )}
+    </div>
   )
 }
 

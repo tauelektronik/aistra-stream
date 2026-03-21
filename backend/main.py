@@ -1404,6 +1404,86 @@ async def health(db: AsyncSession = Depends(get_db)):
     return {"status": "ok", "streams_total": len(streams), "streams_running": running}
 
 
+# ── Prometheus metrics ────────────────────────────────────────────────────────
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics(db: AsyncSession = Depends(get_db)):
+    """Expose metrics in Prometheus text format (no auth required — firewall-protect in prod).
+
+    Scrape config example:
+      - job_name: aistra-stream
+        static_configs:
+          - targets: ['your-server:8001']
+    """
+    streams = await list_streams(db)
+    streams_total   = len(streams)
+    streams_running = sum(1 for s in streams if await hls_manager.get_status(s.id) == "running")
+    streams_error   = sum(1 for s in streams if await hls_manager.get_status(s.id) == "error")
+    streams_stopped = streams_total - streams_running - streams_error
+
+    c = _server_stats_cache
+    lines: list[str] = []
+
+    def g(name: str, help_: str, value, labels: str = "") -> None:
+        """Append a gauge metric line."""
+        lines.append(f"# HELP {name} {help_}")
+        lines.append(f"# TYPE {name} gauge")
+        lbl = f"{{{labels}}}" if labels else ""
+        lines.append(f"{name}{lbl} {value}")
+
+    # ── Stream counts ──
+    g("aistra_streams_total",   "Total number of configured streams",  streams_total)
+    g("aistra_streams_running", "Streams currently running",           streams_running)
+    g("aistra_streams_stopped", "Streams currently stopped",           streams_stopped)
+    g("aistra_streams_error",   "Streams in error state",              streams_error)
+
+    # ── CPU ──
+    if c:
+        g("aistra_cpu_usage_percent",    "Overall CPU usage %",         c.get("cpu_pct", 0))
+        g("aistra_cpu_frequency_mhz",    "Current CPU frequency MHz",   c.get("cpu_freq_mhz", 0))
+        if c.get("cpu_temp_c") is not None:
+            g("aistra_cpu_temperature_celsius", "CPU temperature °C",   c["cpu_temp_c"])
+        for i, pct in enumerate(c.get("cpu_per_core", [])):
+            lines.append(f'aistra_cpu_core_usage_percent{{core="{i}"}} {pct}')
+
+        # ── Memory ──
+        g("aistra_memory_used_bytes",      "RAM used bytes",           round(c.get("mem_used_gb", 0) * 1024**3))
+        g("aistra_memory_total_bytes",     "RAM total bytes",          round(c.get("mem_total_gb", 0) * 1024**3))
+        g("aistra_memory_usage_percent",   "RAM usage %",              c.get("mem_pct", 0))
+        g("aistra_swap_usage_percent",     "Swap usage %",             c.get("mem_swap_pct", 0))
+
+        # ── Disk ──
+        g("aistra_disk_used_bytes",        "Disk used bytes",          round(c.get("disk_used_gb", 0) * 1024**3))
+        g("aistra_disk_total_bytes",       "Disk total bytes",         round(c.get("disk_total_gb", 0) * 1024**3))
+        g("aistra_disk_usage_percent",     "Disk usage %",             c.get("disk_pct", 0))
+
+        # ── Network ──
+        g("aistra_network_upload_mbps",    "Network upload Mbps",      c.get("net_up_mbps", 0))
+        g("aistra_network_download_mbps",  "Network download Mbps",    c.get("net_down_mbps", 0))
+        g("aistra_network_sent_bytes",     "Total bytes sent",         round(c.get("net_up_total_gb", 0) * 1024**3))
+        g("aistra_network_recv_bytes",     "Total bytes received",     round(c.get("net_down_total_gb", 0) * 1024**3))
+
+        # ── GPU ──
+        gpu = c.get("gpu")
+        if gpu:
+            g("aistra_gpu_usage_percent",      "GPU utilisation %",        gpu.get("utilization_pct", 0))
+            g("aistra_gpu_encoder_percent",    "GPU encoder utilisation %", gpu.get("enc_pct", 0))
+            g("aistra_gpu_decoder_percent",    "GPU decoder utilisation %", gpu.get("dec_pct", 0))
+            g("aistra_gpu_memory_used_bytes",  "GPU memory used bytes",     round(gpu.get("memory_used_mb", 0) * 1024**2))
+            g("aistra_gpu_memory_total_bytes", "GPU memory total bytes",    round(gpu.get("memory_total_mb", 0) * 1024**2))
+            g("aistra_gpu_temperature_celsius","GPU temperature °C",        gpu.get("temperature_c", 0))
+
+    # ── Per-stream restart counts ──
+    lines.append("# HELP aistra_stream_restart_count Watchdog restart count per stream")
+    lines.append("# TYPE aistra_stream_restart_count counter")
+    for s in streams:
+        rc = hls_manager._restart_counts.get(s.id, 0)
+        lines.append(f'aistra_stream_restart_count{{stream="{s.id}"}} {rc}')
+
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
 # ── HLS delivery ──────────────────────────────────────────────────────────────
 
 _VALID_QUALITY_RE  = re.compile(r'^(360p|480p|720p|1080p)$')

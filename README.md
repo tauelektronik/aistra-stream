@@ -582,7 +582,7 @@ O resultado é servido em `/api/streams/{id}/thumbnail`.
 | `AISTRA_SHOW_DOCS` | — | Qualquer valor ativa `/docs` (Swagger UI) |
 | `AISTRA_INSECURE_KEY` | — | Permite iniciar sem `SECRET_KEY` (apenas dev) |
 | `BACKUPS_BASE` | `PROJECT_ROOT/backups` | Diretório para armazenar arquivos de backup ZIP |
-| `AISTRA_SETTINGS_FILE` | `PROJECT_ROOT/data/settings.json` | Path legado do JSON de settings (migrado automaticamente para o DB) |
+| `AISTRA_SETTINGS_FILE` | `PROJECT_ROOT/data/settings.json` | Path legado (apenas migração inicial — settings são armazenados no banco desde v1.5) |
 
 ---
 
@@ -676,7 +676,7 @@ aistra-stream/
 | `key` | VARCHAR(100) PK | Nome da configuração |
 | `value` | TEXT | Valor serializado em JSON |
 
-Substitui o arquivo `data/settings.json`. Ao atualizar, o arquivo existente é migrado automaticamente para o banco e renomeado para `.migrated`.
+Substitui o arquivo `data/settings.json` (removido na v1.5). Se o arquivo existir no disco, é migrado automaticamente para o banco no startup e renomeado para `settings.json.migrated`.
 
 **`connection_logs`**
 | Coluna | Tipo | Descrição |
@@ -707,6 +707,88 @@ migrations = [
     # adicione novas aqui — cada ALTER é idempotente (try/except)
 ]
 ```
+
+---
+
+## Monitoramento Externo (Prometheus / Grafana)
+
+O endpoint `/metrics` expõe métricas no formato Prometheus text (sem autenticação — proteja via firewall ou nginx em produção).
+
+### Métricas disponíveis
+
+| Métrica | Tipo | Descrição |
+|---|---|---|
+| `aistra_streams_total` | gauge | Total de streams cadastrados |
+| `aistra_streams_running` | gauge | Streams rodando |
+| `aistra_streams_stopped` | gauge | Streams parados |
+| `aistra_streams_error` | gauge | Streams em erro |
+| `aistra_cpu_usage_percent` | gauge | CPU total % |
+| `aistra_cpu_core_usage_percent{core="N"}` | gauge | CPU por core |
+| `aistra_cpu_frequency_mhz` | gauge | Frequência atual do CPU |
+| `aistra_cpu_temperature_celsius` | gauge | Temperatura do CPU (se disponível) |
+| `aistra_memory_used_bytes` | gauge | RAM usada em bytes |
+| `aistra_memory_total_bytes` | gauge | RAM total em bytes |
+| `aistra_memory_usage_percent` | gauge | RAM % |
+| `aistra_swap_usage_percent` | gauge | Swap % |
+| `aistra_disk_used_bytes` | gauge | Disco usado em bytes |
+| `aistra_disk_total_bytes` | gauge | Disco total em bytes |
+| `aistra_disk_usage_percent` | gauge | Disco % |
+| `aistra_network_upload_mbps` | gauge | Upload atual em Mbps |
+| `aistra_network_download_mbps` | gauge | Download atual em Mbps |
+| `aistra_network_sent_bytes` | gauge | Total de bytes enviados |
+| `aistra_network_recv_bytes` | gauge | Total de bytes recebidos |
+| `aistra_gpu_usage_percent` | gauge | GPU % (NVIDIA) |
+| `aistra_gpu_encoder_percent` | gauge | Encoder GPU % |
+| `aistra_gpu_decoder_percent` | gauge | Decoder GPU % |
+| `aistra_gpu_memory_used_bytes` | gauge | Memória GPU usada |
+| `aistra_gpu_memory_total_bytes` | gauge | Memória GPU total |
+| `aistra_gpu_temperature_celsius` | gauge | Temperatura GPU °C |
+| `aistra_stream_restart_count{stream="id"}` | counter | Reinícios do watchdog por stream |
+
+### Configurar Prometheus
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: aistra-stream
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['seu-servidor:8001']
+```
+
+### Proteger /metrics em produção (nginx)
+
+```nginx
+location /metrics {
+    allow 127.0.0.1;       # Prometheus local
+    allow 10.0.0.0/8;      # rede interna
+    deny all;
+}
+```
+
+---
+
+## CI/CD (GitHub Actions)
+
+O workflow `.github/workflows/ci.yml` executa automaticamente em todo push/PR:
+
+| Job | Trigger | O que faz |
+|---|---|---|
+| `backend` | push + PR | Testa em Python 3.11 e 3.12 (`pytest tests/`) |
+| `frontend` | push + PR | Type-check TypeScript + `npm run build` em Node 20 e 22 |
+| `deploy` | push em `main` (após CI passar) | SSH → git pull → npm build → pip install → restart → health check |
+
+### Configurar deploy automático
+
+Adicione estes **Secrets** no GitHub (`Settings → Secrets → Actions`):
+
+| Secret | Valor |
+|---|---|
+| `DEPLOY_HOST` | IP do servidor (ex: `157.254.54.204`) |
+| `DEPLOY_USER` | Usuário SSH (ex: `root`) |
+| `DEPLOY_SSH_KEY` | Conteúdo da chave SSH privada (ex: `id_aistra_temp`) |
+
+Após configurar, cada push em `main` que passar nos testes faz deploy automático.
 
 ---
 

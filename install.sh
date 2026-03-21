@@ -241,30 +241,51 @@ install_n_m3u8dl() {
     fi
     info "Instalando N_m3u8DL-RE (CENC/DRM downloader)"
     local ARCH; ARCH=$(uname -m)
-    local TAG
-    TAG=$(curl -s https://api.github.com/repos/nilaoda/N_m3u8DL-RE/releases/latest \
-          | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\(.*\)".*/\1/') || true
-    [ -n "$TAG" ] || { warn "Não foi possível obter versão do n_m3u8dl — pulando"; return; }
 
-    local ARCH_LABEL
+    # ── 1. Tentar vendor/ bundled no repo (offline first) ──
+    local ARCH_DIR
     case "$ARCH" in
-        x86_64)  ARCH_LABEL="linux-x64" ;;
-        aarch64) ARCH_LABEL="linux-arm64" ;;
-        *) warn "Arquitetura $ARCH não suportada para n_m3u8dl — baixe manualmente"; return ;;
+        x86_64)  ARCH_DIR="linux-x64" ;;
+        aarch64) ARCH_DIR="linux-arm64" ;;
+        *) ARCH_DIR="" ;;
     esac
+    local VENDOR_BIN="${PROJECT_DIR}/vendor/bin/${ARCH_DIR}/n_m3u8dl"
+    if [ -n "$ARCH_DIR" ] && [ -f "$VENDOR_BIN" ]; then
+        cp "$VENDOR_BIN" /usr/local/bin/n_m3u8dl
+        chmod +x /usr/local/bin/n_m3u8dl
+        ok "n_m3u8dl instalado do vendor/ (offline)"
+        return
+    fi
 
+    # ── 2. Fallback: download do GitHub ──
+    local ARCH_LABEL="${ARCH_DIR:-}"
+    [ -n "$ARCH_LABEL" ] || { warn "Arquitetura $ARCH não suportada para n_m3u8dl — baixe manualmente"; return; }
+
+    local RELEASE_JSON
+    RELEASE_JSON=$(curl -s "https://api.github.com/repos/nilaoda/N_m3u8DL-RE/releases/latest" 2>/dev/null) || true
     local ASSET_URL
-    ASSET_URL=$(curl -s "https://api.github.com/repos/nilaoda/N_m3u8DL-RE/releases/latest" \
-        | grep '"browser_download_url"' \
-        | grep "$ARCH_LABEL" | grep -v musl | grep '\.tar\.gz' | head -1 \
+    ASSET_URL=$(echo "$RELEASE_JSON" | grep '"browser_download_url"' \
+        | grep "$ARCH_LABEL" | grep -v musl | grep -E '\.(tar\.gz|zip)' | head -1 \
         | sed 's/.*"\(https.*\)".*/\1/') || true
+    if [ -z "$ASSET_URL" ]; then
+        ASSET_URL=$(echo "$RELEASE_JSON" | grep '"browser_download_url"' \
+            | grep "$ARCH_LABEL" | grep -E '\.(tar\.gz|zip)' | head -1 \
+            | sed 's/.*"\(https.*\)".*/\1/') || true
+    fi
     [ -n "$ASSET_URL" ] || { warn "Asset do n_m3u8dl não encontrado — pulando"; return; }
 
-    curl -L "$ASSET_URL" -o /tmp/n_m3u8dl.tar.gz || { warn "Download do n_m3u8dl falhou"; return; }
-    tar xf /tmp/n_m3u8dl.tar.gz -C /tmp 2>/dev/null || true
-    find /tmp -name "N_m3u8DL-RE" -type f -exec cp {} /usr/local/bin/n_m3u8dl \; 2>/dev/null || true
+    local N_TMP_DIR="/tmp/n_m3u8dl_install"
+    rm -rf "$N_TMP_DIR" && mkdir -p "$N_TMP_DIR"
+    if [[ "$ASSET_URL" == *.zip ]]; then
+        curl -L "$ASSET_URL" -o "${N_TMP_DIR}/asset.zip" || { warn "Download do n_m3u8dl falhou"; return; }
+        unzip -o "${N_TMP_DIR}/asset.zip" -d "$N_TMP_DIR" &>/dev/null || true
+    else
+        curl -L "$ASSET_URL" -o "${N_TMP_DIR}/asset.tar.gz" || { warn "Download do n_m3u8dl falhou"; return; }
+        tar xf "${N_TMP_DIR}/asset.tar.gz" -C "$N_TMP_DIR" 2>/dev/null || true
+    fi
+    find "$N_TMP_DIR" -name "N_m3u8DL-RE" -type f -exec cp {} /usr/local/bin/n_m3u8dl \; 2>/dev/null || true
     chmod +x /usr/local/bin/n_m3u8dl 2>/dev/null || true
-    rm -f /tmp/n_m3u8dl.tar.gz
+    rm -rf "$N_TMP_DIR"
     ok "n_m3u8dl instalado em /usr/local/bin/n_m3u8dl"
 }
 
@@ -274,6 +295,23 @@ install_mp4decrypt() {
     if command -v mp4decrypt &>/dev/null; then ok "mp4decrypt já instalado"; return; fi
     info "Instalando mp4decrypt (Bento4)"
     local ARCH; ARCH=$(uname -m)
+
+    # ── 1. Tentar vendor/ bundled no repo (offline first) ──
+    local ARCH_DIR
+    case "$ARCH" in
+        x86_64)  ARCH_DIR="linux-x64" ;;
+        aarch64) ARCH_DIR="linux-arm64" ;;
+        *) ARCH_DIR="" ;;
+    esac
+    local VENDOR_BIN="${PROJECT_DIR}/vendor/bin/${ARCH_DIR}/mp4decrypt"
+    if [ -n "$ARCH_DIR" ] && [ -f "$VENDOR_BIN" ]; then
+        cp "$VENDOR_BIN" /usr/local/bin/mp4decrypt
+        chmod +x /usr/local/bin/mp4decrypt
+        ok "mp4decrypt instalado do vendor/ (offline)"
+        return
+    fi
+
+    # ── 2. Fallback: download do bok.net/Bento4 ──
     local BENTO_ARCH
     case "$ARCH" in
         x86_64)  BENTO_ARCH="x86_64-unknown-linux" ;;
@@ -294,8 +332,26 @@ install_mp4decrypt() {
 install_ytdlp() {
     if ! $INSTALL_YT; then ok "yt-dlp: pulando (--no-yt)"; return; fi
     info "Instalando yt-dlp"
+
+    # ── 1. Tentar vendor/ bundled no repo (offline first, universal binary) ──
+    local ARCH; ARCH=$(uname -m)
+    local ARCH_DIR
+    case "$ARCH" in
+        x86_64)  ARCH_DIR="linux-x64" ;;
+        aarch64) ARCH_DIR="linux-arm64" ;;
+        *) ARCH_DIR="linux-x64" ;;  # yt-dlp é Python, tenta x64 de qualquer forma
+    esac
+    local VENDOR_BIN="${PROJECT_DIR}/vendor/bin/${ARCH_DIR}/yt-dlp"
+    if [ -f "$VENDOR_BIN" ]; then
+        cp "$VENDOR_BIN" /usr/local/bin/yt-dlp
+        chmod +x /usr/local/bin/yt-dlp
+        ok "yt-dlp instalado do vendor/ (offline): $(yt-dlp --version 2>/dev/null || echo 'ok')"
+        return
+    fi
+
+    # ── 2. Fallback: download do GitHub ──
     curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
-         -o /usr/local/bin/yt-dlp
+         -o /usr/local/bin/yt-dlp || { warn "Download do yt-dlp falhou"; return; }
     chmod +x /usr/local/bin/yt-dlp
     ok "yt-dlp $(yt-dlp --version 2>/dev/null || echo 'instalado')"
 }
@@ -308,6 +364,12 @@ deploy_project() {
     if [ "$SRC" = "$PROJECT_DIR" ]; then
         ok "Projeto já em ${PROJECT_DIR}"
         cd "$PROJECT_DIR"
+        # Corrige remote se aponta para bundle local ou caminho não-GitHub (git clone de bundle)
+        _cur_remote=$(git remote get-url origin 2>/dev/null || true)
+        if [ -n "$_cur_remote" ] && [[ "$_cur_remote" != "https://github.com"* ]]; then
+            git remote set-url origin "https://github.com/tauelektronik/aistra-stream.git"
+            ok "Remote origin corrigido → GitHub"
+        fi
     elif [ -d "$PROJECT_DIR/.git" ]; then
         info "Atualizando via git pull"
         cd "$PROJECT_DIR"

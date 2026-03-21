@@ -80,8 +80,14 @@ Painel de gerenciamento de streams IPTV com entrega HLS, suporte a DRM CENC-CTR,
 - Usuário padrão criado automaticamente: `admin` / `admin123`
 
 ### Painel
-- Dashboard com stats do servidor em tempo real: CPU, RAM, disco, rede, GPU (NVIDIA)
+- Dashboard com **charts SVG em tempo real** (histórico de 5 minutos, sem biblioteca externa):
+  - **CPU**: todas as cores individuais + linha total; nome do processador, frequência atual e temperatura
+  - **Memória**: RAM + Swap com used/total em GiB
+  - **Rede**: escala dinâmica (kbps/Mbps), total enviado/recebido acumulado
+  - **Disco**: barra de uso com cor por threshold (verde < 70%, laranja < 90%, vermelho)
+  - **GPU NVIDIA**: utilização, memória, encoder %, decoder %, temperatura (via `nvidia-smi`)
 - Stats por stream: uptime, bitrate, FPS, speed, total transferido
+- **Contador de reinício** fixo por stream (`↻ N/5`) — cinza quando estável, laranja quando houve reinícios
 - Log de ffmpeg por stream (últimas N linhas)
 - Alertas via Telegram (bot token + chat ID)
 
@@ -472,7 +478,8 @@ POST /api/streams
 
 | Método | Rota | Permissão | Descrição |
 |---|---|---|---|
-| GET | `/api/server/stats` | operator+ | CPU, RAM, disco, rede, GPU |
+| GET | `/api/server/stats` | operator+ | CPU (total + per-core + nome + freq + temp), RAM, swap, disco, rede (taxa + total), GPU (util + mem + enc + dec + temp) |
+| GET | `/api/streams/{id}/stats` | operator+ | Stats ffmpeg em tempo real: bitrate, fps, uptime, drop frames, ban, restart_count, max_restarts |
 | GET | `/health` | público | Health check (retorna `{"status":"ok"}`) |
 
 ### HLS — Player

@@ -1416,9 +1416,10 @@ async def prometheus_metrics(db: AsyncSession = Depends(get_db)):
           - targets: ['your-server:8001']
     """
     streams = await list_streams(db)
-    streams_total   = len(streams)
-    streams_running = sum(1 for s in streams if await hls_manager.get_status(s.id) == "running")
-    streams_error   = sum(1 for s in streams if await hls_manager.get_status(s.id) == "error")
+    streams_total = len(streams)
+    statuses = await asyncio.gather(*[hls_manager.get_status(s.id) for s in streams])
+    streams_running = sum(1 for st in statuses if st == "running")
+    streams_error   = sum(1 for st in statuses if st == "error")
     streams_stopped = streams_total - streams_running - streams_error
 
     c = _server_stats_cache

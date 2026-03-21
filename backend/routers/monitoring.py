@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.auth import get_current_user
 from backend.crud import get_stream, list_streams
 from backend.database import get_db
-from backend.hls_manager import hls_manager, HLS_BASE
+from backend.hls_manager import hls_manager, HLS_BASE, _send_telegram
 from backend.state import DISK_WARN_PCT, METRICS_TOKEN, server_stats_cache
 
 logger = logging.getLogger(__name__)
@@ -72,8 +72,13 @@ def _get_cpu_name() -> str:
     return __import__("platform").processor() or "CPU"
 
 
+_DISK_ALERT_COOLDOWN_S = 6 * 3600   # send Telegram disk alert at most once every 6 hours
+_last_disk_alert_t: float = 0        # module-level timestamp of last Telegram disk alert
+
+
 async def _server_stats_updater():
     """Background task: refresh server stats every 5 seconds."""
+    global _last_disk_alert_t
     import psutil
 
     psutil.cpu_percent(interval=None)          # prime total CPU counter
@@ -135,15 +140,24 @@ async def _server_stats_updater():
                 "net_down_total_gb":  round(net_cur.bytes_recv / 1024 ** 3, 2),
                 "gpu":                gpu,
             })
-            # Disk space warning
+            # Disk space warning — log always, Telegram at most once per 6 hours
             if disk.percent >= DISK_WARN_PCT:
+                free_gb  = (disk.total - disk.used) / 1024 ** 3
+                total_gb = disk.total / 1024 ** 3
                 logger.warning(
                     "DISK SPACE LOW: %.1f%% used (%.1f GB free of %.1f GB) — "
                     "consider cleaning recordings or expanding storage",
-                    disk.percent,
-                    (disk.total - disk.used) / 1024 ** 3,
-                    disk.total / 1024 ** 3,
+                    disk.percent, free_gb, total_gb,
                 )
+                now = time.time()
+                if now - _last_disk_alert_t >= _DISK_ALERT_COOLDOWN_S:
+                    _last_disk_alert_t = now
+                    asyncio.create_task(_send_telegram(
+                        f"⚠️ *Disco quase cheio!*\n"
+                        f"Uso: *{disk.percent:.1f}%* "
+                        f"({free_gb:.1f} GB livres de {total_gb:.1f} GB)\n"
+                        f"Considere limpar gravações antigas ou expandir o armazenamento."
+                    ))
         except Exception as _e:
             logger.debug("server_stats_updater error: %s", _e)
 

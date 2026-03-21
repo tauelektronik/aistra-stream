@@ -34,6 +34,7 @@ interface StreamStats {
   ban_detected: boolean; ban_http_code: number; ban_count: number; ban_at: number | null
   restart_count: number; max_restarts: number
   needs_login: boolean
+  cookies_expired: boolean
 }
 
 const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
@@ -1407,6 +1408,12 @@ export default function Streams() {
                         <div style={{ marginTop:3, fontSize:10, color:'var(--warning)', display:'flex', alignItems:'center', gap:4 }}>
                           <span>🔑</span>
                           <span>YouTube exige login — abra as configurações do stream e cole os cookies</span>
+                        </div>
+                      )}
+                      {stats[s.id]?.cookies_expired && (
+                        <div style={{ marginTop:3, fontSize:10, color:'var(--warning)', display:'flex', alignItems:'center', gap:4 }}>
+                          <span>🔑</span>
+                          <span>Cookies expirados — exporte novos cookies do navegador e cole nas configurações</span>
                         </div>
                       )}
                       {stats[s.id]?.ban_detected && (

@@ -86,14 +86,16 @@ async def _send_telegram(message: str) -> None:
 
 # ── YouTube URL resolver ───────────────────────────────────────────────────────
 
-_NEEDS_LOGIN = "__NEEDS_LOGIN__"   # sentinel returned when yt-dlp requires authentication
+_NEEDS_LOGIN     = "__NEEDS_LOGIN__"     # sentinel: yt-dlp requires login, no cookies configured
+_COOKIES_EXPIRED = "__COOKIES_EXPIRED__"  # sentinel: cookies provided but expired/invalid
 
 
 async def _resolve_youtube_url(url: str, target_height: int,
                                 cookies_content: str | None = None) -> str:
     """Resolve a YouTube URL to a direct stream URL via yt-dlp.
 
-    Returns _NEEDS_LOGIN sentinel if YouTube requires authentication.
+    Returns _NEEDS_LOGIN if YouTube requires auth and no cookies are configured.
+    Returns _COOKIES_EXPIRED if cookies are configured but expired/invalid.
     cookies_content: Netscape-format cookie string (per-stream override).
     """
     import subprocess as _sp
@@ -130,6 +132,9 @@ async def _resolve_youtube_url(url: str, target_height: int,
 
             stderr = result.stderr
             if "Sign in to confirm" in stderr or "bot" in stderr.lower():
+                if cookies_content and cookies_content.strip():
+                    logger.warning("yt-dlp: cookies expired/invalid for %s", url)
+                    return _COOKIES_EXPIRED
                 logger.warning("yt-dlp: YouTube requires login for %s", url)
                 return _NEEDS_LOGIN
 
@@ -205,6 +210,7 @@ class HLSManager:
         self._autoplay:        set  = set()  # stream_ids that must stay running (never idle-killed, infinite restarts)
         self._starting:        set  = set()  # stream_ids currently being spawned (prevents duplicate starts)
         self._needs_login:     set  = set()  # stream_ids blocked by YouTube login requirement
+        self._cookies_expired: set  = set()  # stream_ids with expired/invalid YouTube cookies
         self._lock            = asyncio.Lock()
         self._cleanup_task:   Optional[asyncio.Task] = None
         self._watchdog_task:  Optional[asyncio.Task] = None
@@ -242,6 +248,8 @@ class HLSManager:
             self._last_restart.pop(stream_id, None)
             self._stall_counts.pop(stream_id, None)
             self._starting.discard(stream_id)
+            self._needs_login.discard(stream_id)
+            self._cookies_expired.discard(stream_id)
             await self._kill_session(stream_id)
 
     def cleanup_stream_data(self, stream_id: str):
@@ -273,6 +281,7 @@ class HLSManager:
             self._ban_url_cooldown.pop(k, None)
         self._autoplay.discard(stream_id)
         self._needs_login.discard(stream_id)
+        self._cookies_expired.discard(stream_id)
 
     async def get_status(self, stream_id: str) -> str:
         sess = self._sessions.get(stream_id)
@@ -448,7 +457,8 @@ class HLSManager:
             "ban_at":         ban.get("at", None),
             "restart_count":  self._restart_counts.get(stream_id, 0),
             "max_restarts":   MAX_RESTARTS,
-            "needs_login":    stream_id in self._needs_login,
+            "needs_login":       stream_id in self._needs_login,
+            "cookies_expired":   stream_id in self._cookies_expired,
         }
 
     # ── Recording ────────────────────────────────────────────────────────────
@@ -916,10 +926,16 @@ class HLSManager:
                     yt_cookies = getattr(stream, "yt_cookies", None)
                     active_url = await _resolve_youtube_url(url, target_h or 720,
                                                             cookies_content=yt_cookies)
+                    if active_url == _COOKIES_EXPIRED:
+                        self._cookies_expired.add(stream.id)
+                        self._needs_login.discard(stream.id)
+                        return hls_dir, "Cookies do YouTube expirados. Exporte novos cookies do navegador e cole nas configurações do stream."
                     if active_url == _NEEDS_LOGIN:
                         self._needs_login.add(stream.id)
+                        self._cookies_expired.discard(stream.id)
                         return hls_dir, "YouTube requer login. Cole os cookies do navegador nas configurações do stream."
                     self._needs_login.discard(stream.id)
+                    self._cookies_expired.discard(stream.id)
                 elif stream.video_codec == "copy" and target_h:
                     active_url = await _resolve_hls_variant(url, target_h)
 

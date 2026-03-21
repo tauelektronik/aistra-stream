@@ -977,6 +977,11 @@ class HLSManager:
             n_args += ["--key", kp]
         if stream.user_agent:
             n_args += ["--header", f"User-Agent:{stream.user_agent}"]
+        drm_token = getattr(stream, "drm_token", None)
+        if drm_token and drm_token.strip():
+            _tok = drm_token.strip()
+            n_args += ["--header", f"accessToken:{_tok}"]
+            n_args += ["--header", f"Authorization:Bearer {_tok}"]
         if stream.http_headers:
             for _hdr in stream.http_headers.splitlines():
                 _hdr = _hdr.strip()

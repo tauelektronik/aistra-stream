@@ -84,6 +84,8 @@ async def run_migrations():
         "ALTER TABLE streams ADD COLUMN yt_cookies TEXT NULL",
         # v1.7 — arbitrary HTTP headers for DRM/CDN streams (Cookie, Authorization, Referer…)
         "ALTER TABLE streams ADD COLUMN http_headers TEXT NULL",
+        # v1.8 — dedicated DRM access token (Disney+ accessToken / Authorization Bearer)
+        "ALTER TABLE streams ADD COLUMN drm_token TEXT NULL",
     ]
     async with engine.begin() as conn:
         for sql in migrations:

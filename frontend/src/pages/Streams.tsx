@@ -12,7 +12,7 @@ import api, { getHlsUrl } from '../api'
 
 interface Stream {
   id: string; name: string; url: string
-  drm_type: string; drm_keys?: string; drm_kid?: string; drm_key?: string
+  drm_type: string; drm_keys?: string; drm_kid?: string; drm_key?: string; drm_token?: string
   stream_type: string
   video_codec: string; video_preset: string; video_crf: number
   video_maxrate: string; video_resolution: string
@@ -39,7 +39,7 @@ interface StreamStats {
 }
 
 const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
-  id:'', name:'', url:'', drm_type:'none', drm_keys:'', drm_kid:'', drm_key:'',
+  id:'', name:'', url:'', drm_type:'none', drm_keys:'', drm_kid:'', drm_key:'', drm_token:'',
   stream_type:'live', video_codec:'libx264', video_preset:'ultrafast',
   video_crf:26, video_maxrate:'', video_resolution:'original',
   audio_codec:'aac', audio_bitrate:'128k',
@@ -395,6 +395,15 @@ function StreamModal({ stream, onSave, onClose }: {
                   onChange={e => set('drm_keys', e.target.value)}
                   placeholder={'c2e511d926db4f209e8cd856656e6bb1:4d67d0f698ad334072056dfbf61d4a99\n...'}
                   style={{ fontFamily:'monospace', fontSize:12, resize:'vertical' }}
+                />
+              </Row>
+              <Row label="Token de Acesso" hint="Disney+: copie o token do DevTools → Network → requisição dssott.com → Request Header 'accessToken'. Expira em ~15 min — atualize quando o stream parar.">
+                <textarea
+                  rows={3}
+                  value={form.drm_token||''}
+                  onChange={e => set('drm_token', e.target.value)}
+                  placeholder={'eyJ6aXAiOiJERUYiLCJraWQiOi...'}
+                  style={{ fontFamily:'monospace', fontSize:10, resize:'vertical' }}
                 />
               </Row>
             </>}

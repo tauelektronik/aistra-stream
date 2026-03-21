@@ -185,6 +185,7 @@ class StreamBase(BaseModel):
     backup_urls:      Optional[str] = None   # newline-separated fallback URLs (failover/balance)
     yt_cookies:       Optional[str] = None   # Netscape-format cookies for yt-dlp (YouTube login)
     http_headers:     Optional[str] = None   # "Key: Value\nKey2: Value2" — custom HTTP headers (Cookie, Authorization, Referer…)
+    drm_token:        Optional[str] = None   # Disney+/DRM access token — sent as accessToken + Authorization: Bearer to n_m3u8dl
     category:         Optional[str] = None   # free-form grouping tag, e.g. "Esportes"
     channel_num:      Optional[int] = Field(None, ge=1, le=99999)  # user-assigned channel number
     enabled:          bool = True

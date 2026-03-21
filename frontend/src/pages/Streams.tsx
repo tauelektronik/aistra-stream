@@ -384,9 +384,12 @@ function StreamModal({ stream, onSave, onClose }: {
               <Sel form={form} set={set} k="drm_type" opts={[['none','Sem DRM'],['cenc_ctr','CENC-CTR (Disney+, etc.)']]} />
             </Row>
             {form.drm_type === 'cenc_ctr' && <>
-              <div style={{ background:'rgba(129,140,248,0.08)', border:'1px solid rgba(129,140,248,0.25)', borderRadius:6, padding:'8px 12px', fontSize:12, color:'var(--text2)', marginBottom:4 }}>
-                <strong>Disney+ / DRM:</strong> coloque o URL da <em>página</em> do evento (ex: <code>https://www.disneyplus.com/video/...</code>) — não o URL do CDN capturado pelo DevTools (esses tokens são bloqueados por IP).<br/>
-                Adicione seus cookies do Disney+ no campo <strong>Cookies (Netscape)</strong> abaixo para que o sistema gere um URL CDN válido para o IP do servidor.
+              <div style={{ background:'rgba(129,140,248,0.08)', border:'1px solid rgba(129,140,248,0.25)', borderRadius:6, padding:'8px 12px', fontSize:12, color:'var(--text2)', marginBottom:4, lineHeight:1.6 }}>
+                <div style={{ fontWeight:600, marginBottom:4 }}>🔄 Auto-renovação (recomendado — Disney+)</div>
+                <div>Cole a URL da <em>página</em> do evento acima (ex: <code>https://www.disneyplus.com/video/...</code>) e adicione os <strong>Cookies (Netscape)</strong> abaixo. O sistema usa yt-dlp para obter automaticamente um URL CDN e token válidos a cada reinício — sem intervenção manual.</div>
+                <div style={{ marginTop:6, color:'var(--text3)' }}>
+                  <strong>Manual (alternativo):</strong> use o URL do CDN (<code>dssott.com</code>) e cole o token de acesso abaixo — expira em ~15 min.
+                </div>
               </div>
               <Row label="Keys / CDM Script" hint="Um par KID:KEY por linha — formato de saída de CDM tools">
                 <textarea
@@ -397,12 +400,12 @@ function StreamModal({ stream, onSave, onClose }: {
                   style={{ fontFamily:'monospace', fontSize:12, resize:'vertical' }}
                 />
               </Row>
-              <Row label="Token de Acesso" hint="Disney+: copie o token do DevTools → Network → requisição dssott.com → Request Header 'accessToken'. Expira em ~15 min — atualize quando o stream parar.">
+              <Row label="Token de Acesso (manual)" hint="Alternativo à auto-renovação: copie de DevTools → Network → req dssott.com → Header 'accessToken'. Expira em ~15 min.">
                 <textarea
                   rows={3}
                   value={form.drm_token||''}
                   onChange={e => set('drm_token', e.target.value)}
-                  placeholder={'eyJ6aXAiOiJERUYiLCJraWQiOi...'}
+                  placeholder={'eyJ6aXAiOiJERUYiLCJraWQiOi... (deixe vazio se usar auto-renovação)'}
                   style={{ fontFamily:'monospace', fontSize:10, resize:'vertical' }}
                 />
               </Row>

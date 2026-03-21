@@ -1358,11 +1358,7 @@ class HLSManager:
                             break
 
                     if ban_detected:
-                        # Record ban per (stream_id, url_idx) with timestamp
                         cur_idx  = self._url_idx.get(sid, 0)
-                        ban_key  = f"{sid}:{cur_idx}"
-                        self._ban_url_cooldown[ban_key] = now
-
                         prev = self._ban_status.get(sid, {})
                         self._ban_status[sid] = {
                             "detected":  True,
@@ -1374,10 +1370,30 @@ class HLSManager:
                             "Stream %s: BAN DETECTED (HTTP %d) on URL index %d",
                             sid, ban_code, cur_idx,
                         )
-                        # Rotate to next URL immediately, skipping banned ones
+
+                        # ── CENC auto-refresh: stream has yt_cookies + site URL ──
+                        # yt-dlp resolves a fresh CDN URL on every restart, so ban
+                        # cooldown doesn't apply — restart immediately.
+                        _s_url = getattr(stream, "url", "")
+                        _s_cookies = getattr(stream, "yt_cookies", None)
+                        _is_cenc_autorefresh = (
+                            getattr(stream, "drm_type", "") == "cenc_ctr"
+                            and _s_cookies
+                            and _YTDLP_SITE_RE.search(_s_url)
+                        )
+                        if _is_cenc_autorefresh:
+                            logger.info(
+                                "Stream %s: CENC auto-refresh — yt-dlp will resolve "
+                                "fresh URL, skipping ban cooldown", sid
+                            )
+                            to_restart.append((sid, stream, count, "ban"))
+                            continue
+
+                        # ── Regular ban: rotate URLs with cooldown ───────────────
+                        ban_key = f"{sid}:{cur_idx}"
+                        self._ban_url_cooldown[ban_key] = now
                         _, urls = self._get_active_url(stream)
                         next_idx = (cur_idx + 1) % len(urls)
-                        # Find first URL not in cooldown
                         found = False
                         for i in range(len(urls)):
                             candidate = (cur_idx + 1 + i) % len(urls)

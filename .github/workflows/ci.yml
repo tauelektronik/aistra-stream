@@ -30,10 +30,10 @@ jobs:
           pip install -r backend/requirements.txt
           pip install pytest pytest-asyncio
 
-      - name: Run backup tests
+      - name: Run tests
         env:
           SECRET_KEY: "ci-test-secret-key-32-chars-minimum-ok"
-        run: python -m pytest tests/test_backup.py -v --tb=short
+        run: python -m pytest tests/ -v --tb=short
 
   # ── Frontend build ───────────────────────────────────────────────────────────
   frontend:

@@ -116,6 +116,36 @@ async def _rate_limit_cleanup():
 
 
 _LOG_RETENTION_DAYS = int(os.getenv("CONNECTION_LOG_RETENTION_DAYS", "90"))
+_REC_RETENTION_DAYS = int(os.getenv("RECORDING_RETENTION_DAYS", "0"))  # 0 = disabled
+
+
+async def _recordings_cleanup():
+    """Background task: delete MP4 recordings older than RECORDING_RETENTION_DAYS every 24h.
+    Disabled when RECORDING_RETENTION_DAYS=0 (default).
+    """
+    if _REC_RETENTION_DAYS <= 0:
+        return
+    from backend.hls_manager import RECORDINGS_BASE
+    while True:
+        await asyncio.sleep(86400)
+        try:
+            cutoff = time.time() - _REC_RETENTION_DAYS * 86400
+            deleted = 0
+            for fname in os.listdir(RECORDINGS_BASE):
+                if not fname.endswith(".mp4"):
+                    continue
+                fpath = os.path.join(RECORDINGS_BASE, fname)
+                try:
+                    if os.path.getmtime(fpath) < cutoff:
+                        os.remove(fpath)
+                        deleted += 1
+                except OSError:
+                    pass
+            if deleted:
+                logger.info("Recordings: deleted %d files older than %d days", deleted, _REC_RETENTION_DAYS)
+        except Exception as exc:
+            logger.warning("Recordings cleanup failed: %s", exc)
+
 
 async def _connection_logs_cleanup():
     """Background task: delete connection_logs older than LOG_RETENTION_DAYS every 24h."""
@@ -149,6 +179,7 @@ async def lifespan(app: FastAPI):
     _stats_task    = asyncio.create_task(_server_stats_updater())
     _rl_task       = asyncio.create_task(_rate_limit_cleanup())
     _connlog_task  = asyncio.create_task(_connection_logs_cleanup())
+    _rec_task      = asyncio.create_task(_recordings_cleanup())
     _backup_task   = asyncio.create_task(_backup_scheduler())
     await _ensure_default_admin()
     # Apply persisted settings from DB
@@ -166,8 +197,9 @@ async def lifespan(app: FastAPI):
     _stats_task.cancel()
     _rl_task.cancel()
     _connlog_task.cancel()
+    _rec_task.cancel()
     _backup_task.cancel()
-    await asyncio.gather(_stats_task, _rl_task, _connlog_task, _backup_task, return_exceptions=True)
+    await asyncio.gather(_stats_task, _rl_task, _connlog_task, _rec_task, _backup_task, return_exceptions=True)
     await hls_manager.shutdown()
     logger.info("aistra-stream stopped")
 

@@ -111,7 +111,11 @@ async def _resolve_youtube_url(url: str, target_height: int,
         tmp_cookie_path = None
         try:
             # -q suprime "--- live ---" e outros textos de status do yt-dlp no stdout
-            cmd = [YTDLP, "-g", "-f", fmt, "--no-playlist", "-q"]
+            # ios/mweb player clients não exigem o "n challenge" do YouTube
+            cmd = [
+                YTDLP, "-g", "-f", fmt, "--no-playlist", "-q",
+                "--extractor-args", "youtube:player_client=ios,mweb,web",
+            ]
 
             # Per-stream cookies take priority over global cookie file
             if cookies_content and cookies_content.strip():

@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sshpass -p 'Conect8911@' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@186.233.119.225 \"echo ''conectado'' && uname -a && uptime\")",
+      "Bash(sshpass -p 'Conect8911@' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o PreferredAuthentications=password -o PubkeyAuthentication=no root@186.233.119.225 \"echo ok\")",
+      "Bash(sshpass --version)",
+      "Bash(SSHPASS='Conect8911@' sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o PreferredAuthentications=keyboard-interactive,password -o PubkeyAuthentication=no root@186.233.119.225 \"echo ok && id\")",
+      "Bash(chmod 600 /tmp/sshpwd.tmp)",
+      "Bash(sshpass -f /tmp/sshpwd.tmp ssh -v -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o PreferredAuthentications=password -o PubkeyAuthentication=no root@186.233.119.225 'echo ok')",
+      "Bash(python3 -c \"import paramiko; print\\(''paramiko ok''\\)\")",
+      "Bash(python -c \"import paramiko; print\\(''ok''\\)\")",
+      "Bash(py -c \"import paramiko; print\\(''ok''\\)\")",
+      "Bash(py -c \":*)",
+      "Bash(python -c \"import ast, sys; ast.parse\\(open\\(''backend/main.py''\\).read\\(\\)\\); print\\(''main.py OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''backend/models.py''\\).read\\(\\)\\); print\\(''models.py OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''backend/crud.py''\\).read\\(\\)\\); print\\(''crud.py OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''backend/database.py''\\).read\\(\\)\\); print\\(''database.py OK''\\)\")",
+      "Bash(npm run:*)",
+      "WebSearch",
+      "WebFetch(domain:blog.premai.io)",
+      "WebFetch(domain:github.com)",
+      "Bash(claude mcp:*)",
+      "Bash(npx --version)",
+      "Bash(uvx --version)",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)"
+    ]
+  }
+}

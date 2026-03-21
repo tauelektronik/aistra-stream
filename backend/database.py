@@ -40,7 +40,7 @@ async def get_db():
 
 async def init_db():
     """Create all tables on startup (no-op if already exist)."""
-    from backend.models import User, Stream, Category, ConnectionLog  # noqa: F401
+    from backend.models import User, Stream, Category, ConnectionLog, Setting, LoginAttemptRL  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await run_migrations()
@@ -71,6 +71,15 @@ async def run_migrations():
         # v1.4 — fix drm_type ENUM to use underscore (cenc_ctr not cenc-ctr)
         "ALTER TABLE streams MODIFY COLUMN drm_type ENUM('none','cenc_ctr') NOT NULL DEFAULT 'none'",
         "UPDATE streams SET drm_type='cenc_ctr' WHERE drm_type='cenc-ctr'",
+        # v1.5 — performance indexes for common query patterns
+        "ALTER TABLE streams ADD INDEX idx_streams_name (name)",
+        "ALTER TABLE streams ADD INDEX idx_streams_enabled (enabled)",
+        "ALTER TABLE streams ADD INDEX idx_streams_category (category)",
+        "ALTER TABLE streams ADD INDEX idx_streams_updated (updated_at)",
+        "ALTER TABLE users ADD INDEX idx_users_role (role)",
+        "ALTER TABLE users ADD INDEX idx_users_active (active)",
+        "ALTER TABLE connection_logs ADD INDEX idx_connlogs_ip (ip)",
+        "ALTER TABLE connection_logs ADD INDEX idx_connlogs_success (success)",
     ]
     async with engine.begin() as conn:
         for sql in migrations:

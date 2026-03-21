@@ -86,8 +86,16 @@ Painel de gerenciamento de streams IPTV com entrega HLS, suporte a DRM CENC-CTR,
 - Alertas via Telegram (bot token + chat ID)
 
 ### Backup / Restore
-- Exporta todos os streams e configurações como JSON
-- Importa com resolução de conflitos (skip ou overwrite por stream)
+- Backup profissional em ZIP: streams, usuários, categorias, configurações e logos
+- Backup automático agendável com retenção configurável (padrão: diário, 7 arquivos)
+- Armazenamento no servidor com lista, download, restauração e deleção via painel
+- Restauração por upload de arquivo ZIP ou seleção de backup armazenado
+- Backup legado JSON mantido para compatibilidade
+
+### Importação M3U
+- Import em lote de canais a partir de arquivo `.m3u` ou `.m3u8`
+- Lê automaticamente `tvg-id`, `tvg-name`, `group-title`
+- Opção de sobrescrever streams existentes (mesmo ID)
 
 ---
 
@@ -266,6 +274,7 @@ TMP_BASE=/tmp/aistra_stream_tmp
 RECORDINGS_BASE=/opt/aistra-stream/recordings
 THUMBNAILS_BASE=/tmp/aistra_thumbnails
 LOGOS_BASE=/opt/aistra-stream/logos
+BACKUPS_BASE=/opt/aistra-stream/backups
 
 # ── Servidor ───────────────────────────────────────────────
 HOST=0.0.0.0
@@ -433,14 +442,31 @@ POST /api/streams
 | POST | `/api/categories/{id}/logo` | operator+ | Upload de logo (imagem) |
 | PUT | `/api/categories/{id}/streams` | operator+ | Atribuir streams à categoria |
 
-### Configurações e Backup (admin only)
+### Configurações (admin only)
 
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/api/settings` | Ler configurações (Telegram, etc) |
+| GET | `/api/settings` | Ler configurações (Telegram, backup, etc) |
 | PUT | `/api/settings` | Salvar configurações |
-| GET | `/api/settings/backup` | Exportar backup JSON |
-| POST | `/api/settings/restore` | Importar backup JSON |
+
+### Backup Profissional (admin only)
+
+| Método | Rota | Descrição |
+|---|---|---|
+| POST | `/api/backup/create` | Criar backup ZIP manual e armazenar no servidor |
+| GET | `/api/backup/list` | Listar backups armazenados |
+| GET | `/api/backup/download/{filename}` | Baixar arquivo ZIP |
+| DELETE | `/api/backup/{filename}` | Deletar backup do servidor |
+| POST | `/api/backup/restore/{filename}` | Restaurar de backup armazenado no servidor |
+| POST | `/api/backup/restore-upload` | Restaurar a partir de upload de ZIP |
+| GET | `/api/settings/backup` | (legado) Exportar backup JSON |
+| POST | `/api/settings/restore` | (legado) Importar backup JSON |
+
+### Importação M3U (admin only)
+
+| Método | Rota | Descrição |
+|---|---|---|
+| POST | `/api/streams/import-m3u` | Importar canais em lote a partir de arquivo M3U |
 
 ### Dashboard / Stats
 
@@ -548,7 +574,8 @@ O resultado é servido em `/api/streams/{id}/thumbnail`.
 | `YTDLP_COOKIES` | `/opt/youtube_cookies.txt` | Path para arquivo de cookies do YouTube |
 | `AISTRA_SHOW_DOCS` | — | Qualquer valor ativa `/docs` (Swagger UI) |
 | `AISTRA_INSECURE_KEY` | — | Permite iniciar sem `SECRET_KEY` (apenas dev) |
-| `AISTRA_SETTINGS_FILE` | `/tmp/aistra_settings.json` | Path do arquivo de configurações em tempo de execução |
+| `BACKUPS_BASE` | `PROJECT_ROOT/backups` | Diretório para armazenar arquivos de backup ZIP |
+| `AISTRA_SETTINGS_FILE` | `PROJECT_ROOT/data/settings.json` | Path legado do JSON de settings (migrado automaticamente para o DB) |
 
 ---
 
@@ -636,6 +663,32 @@ aistra-stream/
 | `logo_path` | VARCHAR(500) | Nome do arquivo de logo |
 | `created_at` | DATETIME | Data de criação |
 
+**`settings`**
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| `key` | VARCHAR(100) PK | Nome da configuração |
+| `value` | TEXT | Valor serializado em JSON |
+
+Substitui o arquivo `data/settings.json`. Ao atualizar, o arquivo existente é migrado automaticamente para o banco e renomeado para `.migrated`.
+
+**`connection_logs`**
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| `id` | INT PK | ID auto-incrementado |
+| `username` | VARCHAR(50) | Usuário que tentou login |
+| `ip` | VARCHAR(64) | IP do cliente |
+| `success` | BOOLEAN | Login bem-sucedido ou não |
+| `created_at` | DATETIME | Timestamp (auto-rotação: 90 dias) |
+
+**`login_attempts_rl`**
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| `id` | INT PK | ID auto-incrementado |
+| `ip` | VARCHAR(64) | IP do cliente |
+| `attempted_at` | DATETIME | Timestamp da tentativa |
+
+Rate limiter persistente em banco — substitui o dict em memória. Sobrevive a restarts e funciona com múltiplos workers.
+
 ### Migrações
 
 Novas colunas são adicionadas automaticamente via `run_migrations()` no startup. Para adicionar uma migração:
@@ -656,7 +709,7 @@ O backend aplica as seguintes proteções:
 
 - **JWT com expiração**: tokens expiram após `TOKEN_EXPIRE_MINUTES` (padrão: 24 h)
 - **bcrypt**: todas as senhas armazenadas com hash bcrypt
-- **Rate limiting no login**: máximo de `LOGIN_RATE_LIMIT` tentativas por IP por `LOGIN_RATE_WINDOW` segundos (429 Too Many Requests)
+- **Rate limiting no login (DB-backed)**: máximo de `LOGIN_RATE_LIMIT` tentativas por IP por `LOGIN_RATE_WINDOW` segundos — persistido no banco, sobrevive a restarts (429 Too Many Requests)
 - **Security headers** em todas as respostas:
   - `X-Content-Type-Options: nosniff`
   - `X-Frame-Options: DENY`

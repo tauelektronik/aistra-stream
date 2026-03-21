@@ -41,6 +41,23 @@ class AudioCodec(str, enum.Enum):
     aac        = "aac"
 
 
+class Setting(Base):
+    """Key-value store for application settings (replaces settings.json file)."""
+    __tablename__ = "settings"
+
+    key   : Mapped[str] = mapped_column(String(100), primary_key=True)
+    value : Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
+class LoginAttemptRL(Base):
+    """Rate-limiter log for login endpoint (replaces in-memory dict)."""
+    __tablename__ = "login_attempts_rl"
+
+    id           : Mapped[int]      = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ip           : Mapped[str]      = mapped_column(String(64), nullable=False, index=True)
+    attempted_at : Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+
 class Category(Base):
     __tablename__ = "categories"
 
@@ -122,12 +139,12 @@ class Stream(Base):
     backup_urls   : Mapped[str|None] = mapped_column(Text, nullable=True)          # newline-separated fallback URLs (failover)
 
     # Category / grouping
-    category      : Mapped[str|None] = mapped_column(String(100), nullable=True)   # e.g. "Esportes", "Notícias"
+    category      : Mapped[str|None] = mapped_column(String(100), nullable=True, index=True)   # e.g. "Esportes", "Notícias"
 
     # Channel ordering
     channel_num   : Mapped[int|None] = mapped_column(Integer, nullable=True, unique=True)  # user-assigned channel number
 
     # Metadata
-    enabled       : Mapped[bool]     = mapped_column(Boolean, default=True)
+    enabled       : Mapped[bool]     = mapped_column(Boolean, default=True, index=True)
     created_at    : Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at    : Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)

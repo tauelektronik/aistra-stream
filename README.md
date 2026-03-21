@@ -67,7 +67,12 @@ Painel de gerenciamento de streams IPTV com entrega HLS, suporte a DRM CENC-CTR,
 - Limpeza automática de sessões inativas (60 s)
 - Watchdog com restart automático (máx 5 tentativas, delay de 15 s)
 - Detecção de stall por bitrate zero (3 polls consecutivos → restart)
-- Thumbnail automático por stream (atualiza a cada 30 s)
+- **Detecção de freshness de segmentos** — restart se nenhum `.ts` novo em `hls_time × 3` segundos
+- Thumbnail automático por stream (atualiza a cada 30 s via background task)
+- **Análise visual automática de frames** (visão computacional com Pillow):
+  - Tela preta (`⬛`) — brilho médio < 10/255 → fonte off-air
+  - Frame congelado (`🔁`) — < 2% dos pixels mudaram entre capturas → encoder travado
+  - Sem sinal (`📡`) — segmentos HLS pararam de ser gerados → fonte completamente offline
 - Exportação M3U de todos os canais habilitados
 
 ### Categorias
@@ -86,10 +91,12 @@ Painel de gerenciamento de streams IPTV com entrega HLS, suporte a DRM CENC-CTR,
   - **Rede**: escala dinâmica (kbps/Mbps), total enviado/recebido acumulado
   - **Disco**: barra de uso com cor por threshold (verde < 70%, laranja < 90%, vermelho)
   - **GPU NVIDIA**: utilização, memória, encoder %, decoder %, temperatura (via `nvidia-smi`)
-- Stats por stream: uptime, bitrate, FPS, speed, total transferido
+- Stats por stream: uptime, bitrate, FPS, speed, total transferido, frame_status (ok/black/frozen/no_signal)
+- **Badges de status visual** no card: `⬛ Vídeo preto`, `🔁 Frame congelado`, `📡 Sem sinal`, `🔑 Login YouTube`, `🔑 Cookies expirados`
 - **Contador de reinício** fixo por stream (`↻ N/5`) — cinza quando estável, laranja quando houve reinícios
 - Log de ffmpeg por stream (últimas N linhas)
-- Alertas via Telegram (bot token + chat ID)
+- Alertas via Telegram: crash de stream, ban de IP, disco cheio (cooldown 6h)
+- **Prometheus `/metrics`** — 27 métricas, autenticação via `METRICS_TOKEN` (Bearer)
 
 ### Backup / Restore
 - Backup profissional em ZIP: streams, usuários, categorias, configurações e logos
@@ -425,6 +432,7 @@ POST /api/streams
 | `proxy` | string | null | Proxy: `http://user:pass@host:port` ou `socks5://...` |
 | `user_agent` | string | null | User-Agent personalizado |
 | `backup_urls` | string | null | URLs de failover (uma por linha) |
+| `yt_cookies` | string | null | Cookies Netscape para yt-dlp (streams YouTube com login) |
 | `category` | string | null | Categoria/grupo |
 | `enabled` | bool | true | Habilita/desabilita o canal |
 
@@ -479,8 +487,9 @@ POST /api/streams
 | Método | Rota | Permissão | Descrição |
 |---|---|---|---|
 | GET | `/api/server/stats` | operator+ | CPU (total + per-core + nome + freq + temp), RAM, swap, disco, rede (taxa + total), GPU (util + mem + enc + dec + temp) |
-| GET | `/api/streams/{id}/stats` | operator+ | Stats ffmpeg em tempo real: bitrate, fps, uptime, drop frames, ban, restart_count, max_restarts |
+| GET | `/api/streams/{id}/stats` | operator+ | Stats ffmpeg em tempo real: bitrate, fps, uptime, drop frames, ban, restart_count, needs_login, cookies_expired, **frame_status** |
 | GET | `/health` | público | Health check (retorna `{"status":"ok"}`) |
+| GET | `/metrics` | condicional | Prometheus text format — requer `Authorization: Bearer $METRICS_TOKEN` se configurado |
 
 ### HLS — Player
 
@@ -553,16 +562,23 @@ ffmpeg -i pipe:0
 O HLS Manager monitora cada sessão a cada `HLS_WATCHDOG_INTERVAL` (padrão: 10 s):
 - Se o processo ffmpeg morreu → restart automático
 - Se o bitrate ficou em 0 por `HLS_STALL_CHECKS` (3) polls consecutivos → restart
+- Se o segmento HLS mais recente tem mais de `hls_time × 3` segundos → marca `no_signal`
 - Após `HLS_STABLE_RUN` (60 s) rodando continuamente → contador de restarts é zerado
 - Após `HLS_MAX_RESTARTS` (5) restarts sem sucesso → sessão marcada como `error` e alerta Telegram enviado
 
-### Thumbnail automático
+### Thumbnail automático + análise visual
 
-A cada 30 s para streams em execução, o backend executa:
+A cada 30 s, um background task captura thumbnails de todos os streams em execução:
 ```
-ffmpeg -ss 0 -i stream.m3u8 -vframes 1 -f image2 {id}.jpg
+ffmpeg -i seg_latest.ts -vframes 1 -vf scale=320:-2 {id}.jpg
 ```
-O resultado é servido em `/api/streams/{id}/thumbnail`.
+Após cada captura, o frame é analisado com **Pillow** (computer vision):
+- Redimensiona para 32×32 pixels em escala de cinza
+- Brilho médio < 10/255 → `frame_status = "black"` (tela preta)
+- < 2% dos pixels mudaram vs frame anterior → `frame_status = "frozen"` (frame congelado)
+- Sem novo segmento `.ts` em `hls_time × 3` s → `frame_status = "no_signal"` (fonte offline)
+
+O `frame_status` aparece em `/api/streams/{id}/stats` e como badge visual no card do stream.
 
 ---
 
@@ -578,7 +594,11 @@ O resultado é servido em `/api/streams/{id}/thumbnail`.
 | `HLS_YT_REFRESH_H` | `4.0` | Horas para refresh proativo de URLs do YouTube |
 | `TELEGRAM_BOT_TOKEN` | `""` | Token do bot do Telegram para alertas |
 | `TELEGRAM_CHAT_ID` | `""` | Chat ID do Telegram (pode ser grupo, negativo) |
-| `YTDLP_COOKIES` | `/opt/youtube_cookies.txt` | Path para arquivo de cookies do YouTube |
+| `YTDLP_COOKIES` | `/opt/youtube_cookies.txt` | Path para arquivo de cookies global do YouTube |
+| `METRICS_TOKEN` | `""` | Bearer token para proteger `/metrics` — vazio = aberto |
+| `DISK_WARN_PERCENT` | `90` | % de uso de disco para acionar alerta (log + Telegram, cooldown 6h) |
+| `RECORDING_RETENTION_DAYS` | `0` | Dias para manter gravações MP4 (0 = desabilitado) |
+| `CONNECTION_LOG_RETENTION_DAYS` | `90` | Dias de retenção dos logs de conexão |
 | `AISTRA_SHOW_DOCS` | — | Qualquer valor ativa `/docs` (Swagger UI) |
 | `AISTRA_INSECURE_KEY` | — | Permite iniciar sem `SECRET_KEY` (apenas dev) |
 | `BACKUPS_BASE` | `PROJECT_ROOT/backups` | Diretório para armazenar arquivos de backup ZIP |
@@ -592,13 +612,24 @@ O resultado é servido em `/api/streams/{id}/thumbnail`.
 aistra-stream/
 ├── backend/
 │   ├── __init__.py
-│   ├── main.py           # FastAPI app, todas as rotas, middleware
-│   ├── models.py         # SQLAlchemy ORM (User, Stream, Category)
-│   ├── schemas.py        # Pydantic schemas com validação
+│   ├── main.py           # FastAPI app — orquestrador slim (~320 linhas)
+│   ├── state.py          # Constantes env compartilhadas (METRICS_TOKEN, DISK_WARN_PCT, etc.)
+│   ├── models.py         # SQLAlchemy ORM (User, Stream, Category, ConnectionLog, etc.)
+│   ├── schemas.py        # Pydantic schemas com validação (StreamCreate, StreamOut, etc.)
 │   ├── crud.py           # Operações CRUD assíncronas
-│   ├── database.py       # Engine SQLAlchemy + init_db + run_migrations
-│   ├── auth.py           # JWT, bcrypt, decorators de permissão
-│   ├── hls_manager.py    # Pipelines HLS, watchdog, thumbnails
+│   ├── database.py       # Engine async + run_migrations() (auto-aplicadas v1.1→v1.6)
+│   ├── auth.py           # JWT, bcrypt, decorators de permissão por papel
+│   ├── hls_manager.py    # Pipelines HLS, watchdog, gravações, thumbnails, análise visual
+│   ├── hls_utils.py      # Funções puras extraídas (testáveis sem ffmpeg): _safe_id, _parse_progress_file, etc.
+│   ├── routers/
+│   │   ├── auth.py       # POST /auth/login, GET /auth/me
+│   │   ├── users.py      # CRUD /api/users
+│   │   ├── streams.py    # CRUD /api/streams + start/stop/log/stats/import-m3u
+│   │   ├── categories.py # CRUD /api/categories + logo
+│   │   ├── backup.py     # /api/backup/* (create, list, download, restore)
+│   │   ├── recordings.py # /api/recordings/* + schedules
+│   │   ├── monitoring.py # /api/server/stats, /health, /metrics, thumbnails, player-config
+│   │   └── settings.py   # GET/PUT /api/settings
 │   └── requirements.txt
 │
 ├── frontend/
@@ -658,6 +689,7 @@ aistra-stream/
 | `output_rtmp` | VARCHAR(500) | URL RTMP de saída |
 | `output_udp` | VARCHAR(200) | URL UDP/SRT de saída |
 | `output_qualities` | VARCHAR(50) | ABR qualities |
+| `yt_cookies` | TEXT NULL | Cookies Netscape para yt-dlp (por stream, v1.6+) |
 | `category` | VARCHAR(100) | Categoria |
 | `enabled` | BOOLEAN | Habilitado/desabilitado |
 | `created_at` / `updated_at` | DATETIME | Timestamps |

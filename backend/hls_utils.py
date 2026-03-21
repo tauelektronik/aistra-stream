@@ -28,6 +28,9 @@ _QUALITY_PRESETS = {
 # Matched against last lines of ffmpeg / n_m3u8dl logs after a crash.
 _BAN_PATTERNS: list[tuple[re.Pattern, int]] = [
     (re.compile(r'HTTP error 403|403 Forbidden|403 forbidden',          re.I), 403),
+    # n_m3u8dl .NET exception format (Disney+/CDN auth failure)
+    (re.compile(r'status code does not indicate success: 403',          re.I), 403),
+    (re.compile(r'x-dss-token.*failure|dss.token.*fail',               re.I), 403),
     (re.compile(r'HTTP error 429|429 Too Many|rate.?limit',             re.I), 429),
     (re.compile(r'HTTP error 451',                                      re.I), 451),
     (re.compile(r'HTTP error 407|407 Proxy',                            re.I), 407),

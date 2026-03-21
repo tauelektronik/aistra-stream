@@ -82,6 +82,8 @@ async def run_migrations():
         "ALTER TABLE connection_logs ADD INDEX idx_connlogs_success (success)",
         # v1.6 — per-stream YouTube cookies for yt-dlp authentication
         "ALTER TABLE streams ADD COLUMN yt_cookies TEXT NULL",
+        # v1.7 — arbitrary HTTP headers for DRM/CDN streams (Cookie, Authorization, Referer…)
+        "ALTER TABLE streams ADD COLUMN http_headers TEXT NULL",
     ]
     async with engine.begin() as conn:
         for sql in migrations:

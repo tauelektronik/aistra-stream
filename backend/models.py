@@ -138,6 +138,7 @@ class Stream(Base):
     user_agent    : Mapped[str|None] = mapped_column(String(500), nullable=True)   # custom UA string
     backup_urls   : Mapped[str|None] = mapped_column(Text, nullable=True)          # newline-separated fallback URLs (failover)
     yt_cookies    : Mapped[str|None] = mapped_column(Text, nullable=True)          # Netscape-format cookies for yt-dlp (YouTube login)
+    http_headers  : Mapped[str|None] = mapped_column(Text, nullable=True)          # "Key: Value\nKey2: Value2\n" — custom HTTP headers (Cookie, Authorization, Referer…)
 
     # Category / grouping
     category      : Mapped[str|None] = mapped_column(String(100), nullable=True, index=True)   # e.g. "Esportes", "Notícias"

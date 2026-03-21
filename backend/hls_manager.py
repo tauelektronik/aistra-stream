@@ -903,6 +903,11 @@ class HLSManager:
             n_args += ["--key", kp]
         if stream.user_agent:
             n_args += ["--header", f"User-Agent:{stream.user_agent}"]
+        if stream.http_headers:
+            for _hdr in stream.http_headers.splitlines():
+                _hdr = _hdr.strip()
+                if _hdr and ":" in _hdr:
+                    n_args += ["--header", _hdr]
         if stream.proxy:
             n_args += ["--custom-proxy", stream.proxy]
         n_args += [
@@ -1041,6 +1046,14 @@ class HLSManager:
                 ]
             if stream.user_agent:
                 ff_args += ["-user_agent", stream.user_agent]
+            if stream.http_headers:
+                _hdr_str = ""
+                for _hdr in stream.http_headers.splitlines():
+                    _hdr = _hdr.strip()
+                    if _hdr and ":" in _hdr:
+                        _hdr_str += _hdr + "\r\n"
+                if _hdr_str:
+                    ff_args += ["-headers", _hdr_str]
             ff_args += ["-i", active_url]
             ff_args += ["-map", "0:v:0?", "-map", f"0:a:{stream.audio_track}?"]
             ff_args += _build_ffmpeg_video_args(stream)

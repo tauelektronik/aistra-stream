@@ -20,7 +20,7 @@ interface Stream {
   hls_time: number; hls_list_size: number; buffer_seconds: number
   output_rtmp?: string; output_udp?: string
   proxy?: string; user_agent?: string; backup_urls?: string
-  yt_cookies?: string
+  yt_cookies?: string; http_headers?: string
   output_qualities?: string; audio_track?: number
   category?: string; channel_num?: number | null
   enabled: boolean; status: string
@@ -46,7 +46,7 @@ const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
   hls_time:15, hls_list_size:15, buffer_seconds:20,
   output_rtmp:'', output_udp:'',
   proxy:'', user_agent:'', backup_urls:'',
-  yt_cookies:'',
+  yt_cookies:'', http_headers:'',
   output_qualities:'', audio_track:0,
   category:'', channel_num: null,
   enabled:true,
@@ -408,6 +408,15 @@ function StreamModal({ stream, onSave, onClose }: {
               </Row>
               <Row label="User-Agent" hint="Deixe vazio para usar o padrão">
                 <input value={form.user_agent||''} onChange={e => set('user_agent', e.target.value)} placeholder="Mozilla/5.0 ..." />
+              </Row>
+              <Row label="Cabeçalhos HTTP" hint="Um cabeçalho por linha: Cookie: token=abc | Authorization: Bearer xxx | Referer: https://site.com — passados ao n_m3u8dl (DRM) e ao ffmpeg (HTTP)">
+                <textarea
+                  rows={4}
+                  value={form.http_headers||''}
+                  onChange={e => set('http_headers', e.target.value)}
+                  placeholder={'Cookie: token=abc123\nAuthorization: Bearer eyJ...\nReferer: https://www.disneyplus.com'}
+                  style={{ fontFamily:'monospace', fontSize:11, resize:'vertical' }}
+                />
               </Row>
               <Row label="URLs de Backup / Balance" hint="Uma URL por linha — rodízio automático em caso de falha">
                 <textarea

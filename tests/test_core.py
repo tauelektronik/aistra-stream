@@ -20,6 +20,11 @@ Cobre:
   13. recording retention — arquivos antigos deletados, novos preservados
   14. recording retention — RECORDING_RETENTION_DAYS=0 não deleta nada
   15. Prometheus format — linhas HELP/TYPE/valor para cada métrica
+  16. hls_utils._parse_progress_file — lê bitrate e fps
+  17. hls_utils._parse_progress_file — retorna dict vazio para arquivo inexistente
+  18. hls_utils._parse_stats_from_log — extrai bitrate do log ffmpeg
+  19. hls_utils._scan_log_for_ban — detecta HTTP 403
+  20. hls_utils._scan_log_for_ban — retorna False para log limpo
 
 Execute:
   python -m pytest tests/test_core.py -v
@@ -269,6 +274,95 @@ def test_prometheus_format():
     assert "# TYPE aistra_streams_total gauge" in text
     assert "aistra_streams_total 5" in text
     assert 'aistra_cpu_core_usage_percent{core="0"} 42.5' in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 16–20  hls_utils — funções recém extraídas
+# ─────────────────────────────────────────────────────────────────────────────
+
+from backend.hls_utils import (
+    _parse_progress_file, _parse_stats_from_log,
+    _scan_log_for_ban, _BAN_PATTERNS,
+)
+
+
+def test_parse_progress_file_reads_bitrate_and_fps():
+    """_parse_progress_file extrai bitrate e fps de um arquivo de progresso ffmpeg."""
+    content = (
+        "frame=120\n"
+        "fps=25.0\n"
+        "bitrate=2048.0kbits/s\n"
+        "total_size=30000000\n"
+        "out_time=00:00:05.000000\n"
+        "speed=1.0x\n"
+        "progress=continue\n"
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        f.write(content)
+        fpath = f.name
+    try:
+        result = _parse_progress_file(fpath)
+        assert "bitrate" in result
+        # Parse bitrate value
+        import re as _re
+        m = _re.search(r"([\d.]+)", result.get("bitrate", ""))
+        assert m and float(m.group(1)) > 0
+        assert float(result.get("fps", "0")) == 25.0
+    finally:
+        os.unlink(fpath)
+
+
+def test_parse_progress_file_missing_file_returns_empty():
+    """_parse_progress_file retorna {} para arquivo inexistente."""
+    result = _parse_progress_file("/tmp/nao_existe_xyz.txt")
+    assert result == {}
+
+
+def test_parse_stats_from_log_extracts_bitrate():
+    """_parse_stats_from_log extrai bitrate de linha típica do log ffmpeg."""
+    content = (
+        "frame= 1200 fps= 25 q=28.0 size=   15360kB "
+        "time=00:00:48.00 bitrate=2621.4kbits/s speed=1.0x\n"
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
+        f.write(content)
+        fpath = f.name
+    try:
+        result = _parse_stats_from_log(fpath)
+        assert "bitrate" in result
+        import re as _re
+        m = _re.search(r"([\d.]+)", result.get("bitrate", ""))
+        assert m and float(m.group(1)) > 0
+    finally:
+        os.unlink(fpath)
+
+
+def test_scan_log_for_ban_detects_403():
+    """_scan_log_for_ban retorna (True, 403) quando log contém HTTP 403."""
+    content = "Server returned 403 Forbidden\n"
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=".log", delete=False) as f:
+        f.write(content.encode())
+        fpath = f.name
+    try:
+        detected, code = _scan_log_for_ban(fpath)
+        assert detected is True
+        assert code == 403
+    finally:
+        os.unlink(fpath)
+
+
+def test_scan_log_for_ban_clean_log_returns_false():
+    """_scan_log_for_ban retorna (False, 0) para log sem erros de ban."""
+    content = "Stream started successfully\nBuffering 100%\n"
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=".log", delete=False) as f:
+        f.write(content.encode())
+        fpath = f.name
+    try:
+        detected, code = _scan_log_for_ban(fpath)
+        assert detected is False
+        assert code == 0
+    finally:
+        os.unlink(fpath)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

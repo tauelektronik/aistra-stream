@@ -63,7 +63,15 @@
       "Bash(gh secret:*)",
       "Bash(gh auth:*)",
       "Bash(python -m pytest tests/ -v --tb=short)",
-      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"cd /opt/aistra-stream && git pull origin main && systemctl restart aistra-stream && sleep 3 && curl -sf http://localhost:8001/health && echo && curl -s -o /dev/null -w ''%{http_code}'' http://localhost:8001/metrics\")"
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"cd /opt/aistra-stream && git pull origin main && systemctl restart aistra-stream && sleep 3 && curl -sf http://localhost:8001/health && echo && curl -s -o /dev/null -w ''%{http_code}'' http://localhost:8001/metrics\")",
+      "Bash(AISTRA_INSECURE_KEY=1 python -m pytest tests/ -v --tb=short)",
+      "Bash(AISTRA_INSECURE_KEY=1 python -c \"from backend.main import app; print\\(''OK''\\)\")",
+      "Bash(python -c \"import aiomysql; print\\(''aiomysql OK''\\)\")",
+      "Bash(pip3 install:*)",
+      "Bash(python -c \"import aiomysql; print\\(''''OK''''\\)\")",
+      "Bash(python -m pip install aiomysql)",
+      "Bash(wc -l backend/main.py backend/routers/*.py backend/state.py)",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"cd /opt/aistra-stream && git pull origin main && systemctl restart aistra-stream && sleep 4 && curl -sf http://localhost:8001/health\")"
     ]
   }
 }

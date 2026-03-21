@@ -115,8 +115,10 @@ async def _rate_limit_cleanup():
             logger.debug("Rate-limit cleanup failed: %s", exc)
 
 
-_LOG_RETENTION_DAYS = int(os.getenv("CONNECTION_LOG_RETENTION_DAYS", "90"))
-_REC_RETENTION_DAYS = int(os.getenv("RECORDING_RETENTION_DAYS", "0"))  # 0 = disabled
+_LOG_RETENTION_DAYS  = int(os.getenv("CONNECTION_LOG_RETENTION_DAYS", "90"))
+_REC_RETENTION_DAYS  = int(os.getenv("RECORDING_RETENTION_DAYS", "0"))   # 0 = disabled
+_DISK_WARN_PCT       = int(os.getenv("DISK_WARN_PERCENT", "90"))          # log warning when disk >= N%
+_METRICS_TOKEN       = os.getenv("METRICS_TOKEN", "")                    # optional bearer token for /metrics
 
 
 async def _recordings_cleanup():
@@ -1412,6 +1414,15 @@ async def _server_stats_updater():
                 "net_down_total_gb":  round(net_cur.bytes_recv / 1024 ** 3, 2),
                 "gpu":                gpu,
             })
+            # Disk space warning
+            if disk.percent >= _DISK_WARN_PCT:
+                logger.warning(
+                    "DISK SPACE LOW: %.1f%% used (%.1f GB free of %.1f GB) — "
+                    "consider cleaning recordings or expanding storage",
+                    disk.percent,
+                    (disk.total - disk.used) / 1024 ** 3,
+                    disk.total / 1024 ** 3,
+                )
         except Exception as _e:
             logger.debug("server_stats_updater error: %s", _e)
 
@@ -1439,14 +1450,27 @@ async def health(db: AsyncSession = Depends(get_db)):
 # ── Prometheus metrics ────────────────────────────────────────────────────────
 
 @app.get("/metrics", include_in_schema=False)
-async def prometheus_metrics(db: AsyncSession = Depends(get_db)):
-    """Expose metrics in Prometheus text format (no auth required — firewall-protect in prod).
+async def prometheus_metrics(request: Request, db: AsyncSession = Depends(get_db)):
+    """Expose metrics in Prometheus text format.
 
-    Scrape config example:
+    If METRICS_TOKEN is set, requires 'Authorization: Bearer <token>'.
+    Otherwise open (firewall-protect in prod).
+
+    Scrape config example (with token):
       - job_name: aistra-stream
         static_configs:
           - targets: ['your-server:8001']
+        authorization:
+          credentials: <your-METRICS_TOKEN>
     """
+    if _METRICS_TOKEN:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer ") or auth[7:] != _METRICS_TOKEN:
+            return Response(
+                content="Unauthorized",
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
     streams = await list_streams(db)
     streams_total = len(streams)
     statuses = await asyncio.gather(*[hls_manager.get_status(s.id) for s in streams])

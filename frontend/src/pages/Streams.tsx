@@ -20,6 +20,7 @@ interface Stream {
   hls_time: number; hls_list_size: number; buffer_seconds: number
   output_rtmp?: string; output_udp?: string
   proxy?: string; user_agent?: string; backup_urls?: string
+  yt_cookies?: string
   output_qualities?: string; audio_track?: number
   category?: string; channel_num?: number | null
   enabled: boolean; status: string
@@ -32,6 +33,7 @@ interface StreamStats {
   drop_frames: number; dup_frames: number; total_size_mb: number
   ban_detected: boolean; ban_http_code: number; ban_count: number; ban_at: number | null
   restart_count: number; max_restarts: number
+  needs_login: boolean
 }
 
 const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
@@ -42,6 +44,7 @@ const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
   hls_time:15, hls_list_size:15, buffer_seconds:20,
   output_rtmp:'', output_udp:'',
   proxy:'', user_agent:'', backup_urls:'',
+  yt_cookies:'',
   output_qualities:'', audio_track:0,
   category:'', channel_num: null,
   enabled:true,
@@ -414,6 +417,28 @@ function StreamModal({ stream, onSave, onClose }: {
                 />
               </Row>
             </div>
+
+            {/youtube\.com|youtu\.be/i.test(form.url || '') && (
+              <div style={{ marginTop:8, borderTop:'1px solid var(--border)', paddingTop:16 }}>
+                <div style={{ fontSize:11, fontWeight:600, color:'var(--warning)', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.05em', display:'flex', alignItems:'center', gap:6 }}>
+                  🔑 YouTube — Cookies de autenticação
+                </div>
+                <div style={{ fontSize:11, color:'var(--text3)', marginBottom:10, lineHeight:1.5 }}>
+                  Necessário quando o YouTube exibe o erro <em>"Sign in to confirm you're not a bot"</em>.
+                  Exporte os cookies do navegador no formato Netscape usando a extensão{' '}
+                  <strong>Get cookies.txt LOCALLY</strong> (Chrome/Edge/Firefox) e cole o conteúdo abaixo.
+                </div>
+                <Row label="Cookies (Netscape)" hint="Cole o conteúdo do arquivo cookies.txt exportado pelo navegador">
+                  <textarea
+                    rows={5}
+                    value={form.yt_cookies||''}
+                    onChange={e => set('yt_cookies', e.target.value)}
+                    placeholder={'# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t...\tCOOKIE_NAME\tVALUE'}
+                    style={{ fontFamily:'monospace', fontSize:11, resize:'vertical' }}
+                  />
+                </Row>
+              </div>
+            )}
           </>}
 
           {tab === 'video' && <>
@@ -1378,6 +1403,12 @@ export default function Streams() {
                         )}
                       </div>
                       <StatsLine id={s.id} streamRunning={s.status === 'running'} />
+                      {stats[s.id]?.needs_login && (
+                        <div style={{ marginTop:3, fontSize:10, color:'var(--warning)', display:'flex', alignItems:'center', gap:4 }}>
+                          <span>🔑</span>
+                          <span>YouTube exige login — abra as configurações do stream e cole os cookies</span>
+                        </div>
+                      )}
                       {stats[s.id]?.ban_detected && (
                         <div style={{ marginTop:3, fontSize:10, color:'var(--danger)', display:'flex', alignItems:'center', gap:4 }}>
                           <FiSlash size={10} />

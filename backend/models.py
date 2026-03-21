@@ -137,6 +137,7 @@ class Stream(Base):
     proxy         : Mapped[str|None] = mapped_column(String(500), nullable=True)   # http://user:pass@host:port or socks5://
     user_agent    : Mapped[str|None] = mapped_column(String(500), nullable=True)   # custom UA string
     backup_urls   : Mapped[str|None] = mapped_column(Text, nullable=True)          # newline-separated fallback URLs (failover)
+    yt_cookies    : Mapped[str|None] = mapped_column(Text, nullable=True)          # Netscape-format cookies for yt-dlp (YouTube login)
 
     # Category / grouping
     category      : Mapped[str|None] = mapped_column(String(100), nullable=True, index=True)   # e.g. "Esportes", "Notícias"

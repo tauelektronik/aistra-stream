@@ -86,8 +86,18 @@ async def _send_telegram(message: str) -> None:
 
 # ── YouTube URL resolver ───────────────────────────────────────────────────────
 
-async def _resolve_youtube_url(url: str, target_height: int) -> str:
+_NEEDS_LOGIN = "__NEEDS_LOGIN__"   # sentinel returned when yt-dlp requires authentication
+
+
+async def _resolve_youtube_url(url: str, target_height: int,
+                                cookies_content: str | None = None) -> str:
+    """Resolve a YouTube URL to a direct stream URL via yt-dlp.
+
+    Returns _NEEDS_LOGIN sentinel if YouTube requires authentication.
+    cookies_content: Netscape-format cookie string (per-stream override).
+    """
     import subprocess as _sp
+    import tempfile as _tmp
 
     if target_height:
         fmt = f"best[height<={target_height}][ext=mp4]/best[height<={target_height}]/best"
@@ -95,10 +105,21 @@ async def _resolve_youtube_url(url: str, target_height: int) -> str:
         fmt = "best[ext=mp4]/best"
 
     def _run():
+        tmp_cookie_path = None
         try:
             cmd = [YTDLP, "-g", "-f", fmt, "--no-playlist"]
-            if YTDLP_COOKIES and os.path.exists(YTDLP_COOKIES):
+
+            # Per-stream cookies take priority over global cookie file
+            if cookies_content and cookies_content.strip():
+                tmp = _tmp.NamedTemporaryFile(mode="w", suffix=".txt",
+                                              prefix="yt_cookies_", delete=False)
+                tmp.write(cookies_content)
+                tmp.close()
+                tmp_cookie_path = tmp.name
+                cmd += ["--cookies", tmp_cookie_path]
+            elif YTDLP_COOKIES and os.path.exists(YTDLP_COOKIES):
                 cmd += ["--cookies", YTDLP_COOKIES]
+
             cmd.append(url)
             result = _sp.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
@@ -106,11 +127,23 @@ async def _resolve_youtube_url(url: str, target_height: int) -> str:
                 if lines:
                     logger.info("yt-dlp resolved %d URL(s) for %s", len(lines), url)
                     return lines[0]
-            logger.warning("yt-dlp failed: %s", result.stderr[:300])
+
+            stderr = result.stderr
+            if "Sign in to confirm" in stderr or "bot" in stderr.lower():
+                logger.warning("yt-dlp: YouTube requires login for %s", url)
+                return _NEEDS_LOGIN
+
+            logger.warning("yt-dlp failed: %s", stderr[:300])
             return url
         except Exception as exc:
             logger.warning("yt-dlp error: %s", exc)
             return url
+        finally:
+            if tmp_cookie_path:
+                try:
+                    os.unlink(tmp_cookie_path)
+                except OSError:
+                    pass
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _run)
@@ -171,6 +204,7 @@ class HLSManager:
         self._schedules:       dict = {}   # sched_id  → {stream_id, start_at, duration_s, label, created_at}
         self._autoplay:        set  = set()  # stream_ids that must stay running (never idle-killed, infinite restarts)
         self._starting:        set  = set()  # stream_ids currently being spawned (prevents duplicate starts)
+        self._needs_login:     set  = set()  # stream_ids blocked by YouTube login requirement
         self._lock            = asyncio.Lock()
         self._cleanup_task:   Optional[asyncio.Task] = None
         self._watchdog_task:  Optional[asyncio.Task] = None
@@ -232,12 +266,13 @@ class HLSManager:
                 os.unlink(path)
             except OSError:
                 pass
-        # Clear ban state, URL cooldowns, autoplay flag
+        # Clear ban state, URL cooldowns, autoplay flag, needs_login
         self._ban_status.pop(stream_id, None)
         keys = [k for k in self._ban_url_cooldown if k.startswith(f"{stream_id}:")]
         for k in keys:
             self._ban_url_cooldown.pop(k, None)
         self._autoplay.discard(stream_id)
+        self._needs_login.discard(stream_id)
 
     async def get_status(self, stream_id: str) -> str:
         sess = self._sessions.get(stream_id)
@@ -413,6 +448,7 @@ class HLSManager:
             "ban_at":         ban.get("at", None),
             "restart_count":  self._restart_counts.get(stream_id, 0),
             "max_restarts":   MAX_RESTARTS,
+            "needs_login":    stream_id in self._needs_login,
         }
 
     # ── Recording ────────────────────────────────────────────────────────────
@@ -877,7 +913,13 @@ class HLSManager:
 
             if not local_path:
                 if _YT_RE.search(url):
-                    active_url = await _resolve_youtube_url(url, target_h or 720)
+                    yt_cookies = getattr(stream, "yt_cookies", None)
+                    active_url = await _resolve_youtube_url(url, target_h or 720,
+                                                            cookies_content=yt_cookies)
+                    if active_url == _NEEDS_LOGIN:
+                        self._needs_login.add(stream.id)
+                        return hls_dir, "YouTube requer login. Cole os cookies do navegador nas configurações do stream."
+                    self._needs_login.discard(stream.id)
                 elif stream.video_codec == "copy" and target_h:
                     active_url = await _resolve_hls_variant(url, target_h)
 

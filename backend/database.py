@@ -80,6 +80,8 @@ async def run_migrations():
         "ALTER TABLE users ADD INDEX idx_users_active (active)",
         "ALTER TABLE connection_logs ADD INDEX idx_connlogs_ip (ip)",
         "ALTER TABLE connection_logs ADD INDEX idx_connlogs_success (success)",
+        # v1.6 — per-stream YouTube cookies for yt-dlp authentication
+        "ALTER TABLE streams ADD COLUMN yt_cookies TEXT NULL",
     ]
     async with engine.begin() as conn:
         for sql in migrations:

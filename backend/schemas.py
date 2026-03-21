@@ -183,6 +183,7 @@ class StreamBase(BaseModel):
     proxy:            Optional[str] = None   # http://user:pass@host:port or socks5://host:port
     user_agent:       Optional[str] = None   # custom User-Agent header
     backup_urls:      Optional[str] = None   # newline-separated fallback URLs (failover/balance)
+    yt_cookies:       Optional[str] = None   # Netscape-format cookies for yt-dlp (YouTube login)
     category:         Optional[str] = None   # free-form grouping tag, e.g. "Esportes"
     channel_num:      Optional[int] = Field(None, ge=1, le=99999)  # user-assigned channel number
     enabled:          bool = True

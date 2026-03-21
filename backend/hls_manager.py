@@ -851,6 +851,18 @@ class HLSManager:
 
     async def _start_cenc_session(self, stream, hls_dir: str, url: str) -> dict:
         sid = _safe_id(stream.id)
+
+        if not os.path.isfile(N_M3U8DL):
+            raise RuntimeError(
+                f"Binário DRM não encontrado: {N_M3U8DL}. "
+                "Reinstale com suporte DRM: bash install.sh (sem --no-drm)."
+            )
+        if not os.path.isfile(MP4DECRYPT):
+            raise RuntimeError(
+                f"Binário DRM não encontrado: {MP4DECRYPT}. "
+                "Reinstale com suporte DRM: bash install.sh (sem --no-drm)."
+            )
+
         os.makedirs(PIPE_BASE, exist_ok=True)
 
         # Remove all leftover files/pipes for this stream ID so n_m3u8dl

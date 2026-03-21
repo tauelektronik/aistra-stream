@@ -73,8 +73,13 @@ grep -q "^YTDLP="           .env  || echo "YTDLP=$(command -v yt-dlp || echo /us
 grep -q "^YTDLP_COOKIES="   .env  || echo "YTDLP_COOKIES=/opt/youtube_cookies.txt"                     >> .env
 grep -q "^PIPE_BASE="       .env  || echo "PIPE_BASE=/tmp/aistra_stream_pipes"                          >> .env
 grep -q "^TMP_BASE="        .env  || echo "TMP_BASE=/tmp/aistra_stream_tmp"                             >> .env
-mkdir -p "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos" "${PROJECT_DIR}/data"
-chmod 750 "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos" "${PROJECT_DIR}/data"
+grep -q "^METRICS_TOKEN="   .env  || {
+    T=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+    echo "METRICS_TOKEN=${T}" >> .env
+    warn "METRICS_TOKEN gerado e adicionado ao .env"
+}
+mkdir -p "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos" "${PROJECT_DIR}/data" "${PROJECT_DIR}/backups"
+chmod 750 "${PROJECT_DIR}/recordings" "${PROJECT_DIR}/logos" "${PROJECT_DIR}/data" "${PROJECT_DIR}/backups"
 ok ".env verificado"
 
 # ── 4. Atualizar dependências Python ──────────────────────────

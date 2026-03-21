@@ -79,7 +79,29 @@
       "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"curl -s -X POST http://localhost:8001/auth/login -H ''Content-Type: application/json'' -d ''{\"\"username\"\":\"\"admin\"\",\"\"password\"\":\"\"admin123\"\"}''\")",
       "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"journalctl -u aistra-stream -n 50 --no-pager 2>/dev/null | tail -30\")",
       "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"journalctl -u aistra-stream --no-pager -n 200 2>/dev/null | grep -i ''yt2\\\\|youtube\\\\|yt-dlp\\\\|ytdlp'' | tail -30\")",
-      "Bash(python -m pytest tests/ -q --tb=short)"
+      "Bash(python -m pytest tests/ -q --tb=short)",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"cd /opt/aistra-stream && git pull origin main && systemctl is-active aistra-stream && curl -sf http://localhost:8001/health && echo && curl -sf http://localhost:8001/metrics | head -5\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"cat /opt/aistra-stream/.env 2>/dev/null || echo ''NO .env''\")",
+      "Bash(python3 -c \"import secrets; print\\(secrets.token_hex\\(32\\)\\)\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -o StrictHostKeyChecking=no -l root 157.254.54.204 \"cat /opt/aistra-stream/.env\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -o StrictHostKeyChecking=no -l root 157.254.54.204 \"cd /opt/aistra-stream && bash update.sh 2>&1\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -o StrictHostKeyChecking=no -l root 157.254.54.204 \"cd /opt/aistra-stream && git pull origin main && pip install -q -r backend/requirements.txt && cd frontend && npm ci --silent && npm run build --silent && cd .. && systemctl restart aistra-stream && systemctl is-active aistra-stream\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -o StrictHostKeyChecking=no -l root 157.254.54.204 \"cd /opt/aistra-stream && git pull origin main && pip install -q Pillow && cd frontend && npm ci --silent && npm run build --silent && cd .. && systemctl restart aistra-stream && systemctl is-active aistra-stream\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -o StrictHostKeyChecking=no -l root 157.254.54.204 \"pip show Pillow 2>/dev/null | grep -E ''Name|Version'' && python3 -c ''from PIL import Image; print\\(\"\"Pillow OK\"\"\\)''\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -o StrictHostKeyChecking=no -l root 157.254.54.204 \"grep -n ''ALLOWED_ORIGINS\\\\|HOST\\\\|PORT'' /opt/aistra-stream/.env\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -o StrictHostKeyChecking=no -l root 157.254.54.204 \"nginx -v 2>&1; ls /etc/nginx/sites-enabled/ 2>/dev/null || echo ''sem nginx''\")",
+      "Bash(python -m pytest tests/test_visual.py -v --tb=short)",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -o StrictHostKeyChecking=no -l root 157.254.54.204 \"cd /opt/aistra-stream && git pull origin main && python -m pytest tests/ -q 2>&1 && systemctl is-active aistra-stream\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -o StrictHostKeyChecking=no -l root 157.254.54.204 \"cd /opt/aistra-stream && ./venv/bin/python -m pytest tests/ -q 2>&1 && systemctl is-active aistra-stream\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -o StrictHostKeyChecking=no -l root 157.254.54.204 \"cd /opt/aistra-stream && ./venv/bin/pip install -q -r backend/requirements.txt && ./venv/bin/pip install -q pytest pytest-asyncio && ./venv/bin/python -m pytest tests/ -q 2>&1\")",
+      "Bash(bash -n \"c:/Users/TAU/Documents/VS Code/aistra-stream/install.sh\")",
+      "Bash(bash -n \"c:/Users/TAU/Documents/VS Code/aistra-stream/uninstall.sh\")",
+      "Bash(bash -n \"c:/Users/TAU/Documents/VS Code/aistra-stream/update.sh\")",
+      "Bash(sshpass -V)",
+      "Bash(sshpass -p 'conecthost6070@' ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no root@87.76.204.29 \"echo OK\")",
+      "Bash(ping -n 2 87.76.204.29)",
+      "Bash(python -c \":*)",
+      "Bash(python3 -c \":*)"
     ]
   }
 }

@@ -102,14 +102,16 @@ async def _resolve_youtube_url(url: str, target_height: int,
     import tempfile as _tmp
 
     if target_height:
-        fmt = f"best[height<={target_height}][ext=mp4]/best[height<={target_height}]/best"
+        # Sem [ext=mp4]: lives usam .ts/DASH — o filtro de extensão descartava a live
+        fmt = f"best[height<={target_height}]/best"
     else:
-        fmt = "best[ext=mp4]/best"
+        fmt = "best"
 
     def _run():
         tmp_cookie_path = None
         try:
-            cmd = [YTDLP, "-g", "-f", fmt, "--no-playlist"]
+            # -q suprime "--- live ---" e outros textos de status do yt-dlp no stdout
+            cmd = [YTDLP, "-g", "-f", fmt, "--no-playlist", "-q"]
 
             # Per-stream cookies take priority over global cookie file
             if cookies_content and cookies_content.strip():
@@ -125,7 +127,9 @@ async def _resolve_youtube_url(url: str, target_height: int,
             cmd.append(url)
             result = _sp.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
-                lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
+                # Aceitar apenas linhas que são URLs válidas (ignora "--- live ---" etc.)
+                lines = [l.strip() for l in result.stdout.strip().splitlines()
+                         if l.strip().startswith("http")]
                 if lines:
                     logger.info("yt-dlp resolved %d URL(s) for %s", len(lines), url)
                     return lines[0]

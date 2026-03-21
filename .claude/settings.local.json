@@ -71,7 +71,15 @@
       "Bash(python -c \"import aiomysql; print\\(''''OK''''\\)\")",
       "Bash(python -m pip install aiomysql)",
       "Bash(wc -l backend/main.py backend/routers/*.py backend/state.py)",
-      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"cd /opt/aistra-stream && git pull origin main && systemctl restart aistra-stream && sleep 4 && curl -sf http://localhost:8001/health\")"
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"cd /opt/aistra-stream && git pull origin main && systemctl restart aistra-stream && sleep 4 && curl -sf http://localhost:8001/health\")",
+      "Bash(find 'c:/Users/TAU/Documents/VS Code/aistra-stream/tests' -name *.py -type f)",
+      "Bash(python -c \"import os; os.environ[''AISTRA_INSECURE_KEY'']=''1''; os.environ[''SECRET_KEY'']=''ci-test-secret-key-32-chars-minimum-ok''; from backend.hls_manager import hls_manager, _safe_id, HLS_BASE; print\\(''hls_manager OK''\\)\")",
+      "Bash(python -c \"from backend.hls_utils import _safe_id, _scan_log_for_ban, _parse_progress_file; print\\(''hls_utils OK''\\)\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"curl -sf http://localhost:8001/api/streams 2>/dev/null | python3 -c \"\"import json,sys; streams=json.load\\(sys.stdin\\); s=[x for x in streams if x[''id'']==''yt2'']; print\\(json.dumps\\(s[0], indent=2\\) if s else ''not found''\\)\"\"\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"curl -s -X POST http://localhost:8001/auth/login -H ''Content-Type: application/json'' -d ''{\"\"username\"\":\"\"admin\"\",\"\"password\"\":\"\"admin123\"\"}''\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"journalctl -u aistra-stream -n 50 --no-pager 2>/dev/null | tail -30\")",
+      "Bash(ssh -i \"C:/Users/TAU/.ssh/id_aistra_temp\" -l root 157.254.54.204 \"journalctl -u aistra-stream --no-pager -n 200 2>/dev/null | grep -i ''yt2\\\\|youtube\\\\|yt-dlp\\\\|ytdlp'' | tail -30\")",
+      "Bash(python -m pytest tests/ -q --tb=short)"
     ]
   }
 }

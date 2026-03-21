@@ -154,6 +154,36 @@ async def _resolve_youtube_url(url: str, target_height: int,
     return await loop.run_in_executor(None, _run)
 
 
+# ── Frame analysis (Pillow-based computer vision) ─────────────────────────────
+
+def _analyze_frame_sync(img_path: str, prev_data: bytes | None) -> tuple[str, bytes]:
+    """Analyze a thumbnail JPEG for visual anomalies.
+
+    Returns (status, pixel_data_for_next_comparison) where status is:
+      "ok"       — normal video content
+      "black"    — average brightness below threshold (black frame / off-air)
+      "frozen"   — less than 2% of pixels changed vs previous thumbnail
+      "unknown"  — PIL unavailable or image unreadable
+    """
+    try:
+        from PIL import Image  # soft import — Pillow may not be installed
+        img  = Image.open(img_path).convert("L").resize((32, 32))
+        data = bytes(img.getdata())   # 1024 bytes, grayscale 32×32
+        mean = sum(data) / len(data)
+
+        if mean < 10:                 # average brightness < 10/255 → black
+            return "black", data
+
+        if prev_data and len(prev_data) == len(data):
+            changed = sum(1 for a, b in zip(data, prev_data) if abs(int(a) - int(b)) > 10)
+            if changed < len(data) * 0.02:   # < 2% pixels changed → frozen
+                return "frozen", data
+
+        return "ok", data
+    except Exception:
+        return "unknown", b""
+
+
 # ── HLS variant selector ──────────────────────────────────────────────────────
 
 async def _resolve_hls_variant(url: str, target_height: int) -> str:
@@ -211,10 +241,13 @@ class HLSManager:
         self._starting:        set  = set()  # stream_ids currently being spawned (prevents duplicate starts)
         self._needs_login:     set  = set()  # stream_ids blocked by YouTube login requirement
         self._cookies_expired: set  = set()  # stream_ids with expired/invalid YouTube cookies
+        self._frame_status:    dict = {}  # stream_id → "ok"|"black"|"frozen"|"no_signal"|"unknown"
+        self._prev_thumb_data: dict = {}  # stream_id → bytes (32×32 grayscale pixels for comparison)
         self._lock            = asyncio.Lock()
         self._cleanup_task:   Optional[asyncio.Task] = None
         self._watchdog_task:  Optional[asyncio.Task] = None
         self._schedule_task:  Optional[asyncio.Task] = None
+        self._thumb_task:     Optional[asyncio.Task] = None
         self._schedules_file  = os.path.join(RECORDINGS_BASE, "_schedules.json")
         self._load_schedules()
 
@@ -225,14 +258,15 @@ class HLSManager:
         self._cleanup_task   = asyncio.create_task(self._cleanup_loop())
         self._watchdog_task  = asyncio.create_task(self._watchdog_loop())
         self._schedule_task  = asyncio.create_task(self._schedule_loop())
-        logger.info("HLS manager: background cleanup + watchdog + scheduler started")
+        self._thumb_task     = asyncio.create_task(self._thumbnail_monitor_loop())
+        logger.info("HLS manager: background cleanup + watchdog + scheduler + thumb-monitor started")
 
     async def shutdown(self):
         """Cancel background tasks and kill all active sessions. Call on app shutdown."""
-        for task in (self._cleanup_task, self._watchdog_task, self._schedule_task):
+        for task in (self._cleanup_task, self._watchdog_task, self._schedule_task, self._thumb_task):
             if task and not task.done():
                 task.cancel()
-        tasks = [t for t in (self._cleanup_task, self._watchdog_task, self._schedule_task) if t]
+        tasks = [t for t in (self._cleanup_task, self._watchdog_task, self._schedule_task, self._thumb_task) if t]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         # Kill all running sessions gracefully
@@ -250,6 +284,8 @@ class HLSManager:
             self._starting.discard(stream_id)
             self._needs_login.discard(stream_id)
             self._cookies_expired.discard(stream_id)
+            self._frame_status.pop(stream_id, None)
+            self._prev_thumb_data.pop(stream_id, None)
             await self._kill_session(stream_id)
 
     def cleanup_stream_data(self, stream_id: str):
@@ -282,6 +318,8 @@ class HLSManager:
         self._autoplay.discard(stream_id)
         self._needs_login.discard(stream_id)
         self._cookies_expired.discard(stream_id)
+        self._frame_status.pop(stream_id, None)
+        self._prev_thumb_data.pop(stream_id, None)
 
     async def get_status(self, stream_id: str) -> str:
         sess = self._sessions.get(stream_id)
@@ -459,6 +497,7 @@ class HLSManager:
             "max_restarts":   MAX_RESTARTS,
             "needs_login":       stream_id in self._needs_login,
             "cookies_expired":   stream_id in self._cookies_expired,
+            "frame_status":      self._frame_status.get(stream_id, "unknown"),
         }
 
     # ── Recording ────────────────────────────────────────────────────────────
@@ -744,7 +783,27 @@ class HLSManager:
                 return None
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _run)
+        path = await loop.run_in_executor(None, _run)
+        if path:
+            prev  = self._prev_thumb_data.get(stream_id)
+            status, thumb_data = await loop.run_in_executor(
+                None, _analyze_frame_sync, path, prev
+            )
+            self._frame_status[stream_id]    = status
+            self._prev_thumb_data[stream_id] = thumb_data
+        return path
+
+    async def _thumbnail_monitor_loop(self):
+        """Background task: capture and analyze thumbnails every 30 s for all running streams."""
+        await asyncio.sleep(15)   # stagger start so watchdog runs first
+        while True:
+            for sid in list(self._sessions):
+                try:
+                    if self._sessions[sid]["proc"].returncode is None:
+                        await self.capture_thumbnail(sid)
+                except Exception as exc:
+                    logger.debug("Thumbnail monitor %s: %s", sid, exc)
+            await asyncio.sleep(30)
 
     # ── Startup cleanup ──────────────────────────────────────────────────────
 
@@ -1127,6 +1186,23 @@ class HLSManager:
                                         to_restart.append((sid, stream, count, "stall"))
                         else:
                             self._stall_counts[sid] = 0
+
+                    # ── Segment freshness: detect source offline even when ffmpeg runs ──
+                    if stream and uptime > 60:
+                        hls_dir  = os.path.join(HLS_BASE, sid)
+                        segs     = glob.glob(os.path.join(hls_dir, "seg*.ts"))
+                        if not segs:
+                            for _q in ("720p", "1080p", "480p", "360p"):
+                                segs = glob.glob(os.path.join(hls_dir, _q, "seg*.ts"))
+                                if segs:
+                                    break
+                        if segs:
+                            latest_age = time.time() - os.path.getmtime(max(segs, key=os.path.getmtime))
+                            hls_time_s = getattr(stream, "hls_time", 15)
+                            if latest_age > hls_time_s * 3:
+                                self._frame_status[sid] = "no_signal"
+                            elif self._frame_status.get(sid) == "no_signal":
+                                self._frame_status.pop(sid, None)
 
                     # ── YouTube proactive URL refresh ─────────────────────
                     if stream and _YT_RE.search(getattr(stream, "url", "")):

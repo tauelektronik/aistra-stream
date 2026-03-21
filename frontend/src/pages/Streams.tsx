@@ -35,6 +35,7 @@ interface StreamStats {
   restart_count: number; max_restarts: number
   needs_login: boolean
   cookies_expired: boolean
+  frame_status?: string
 }
 
 const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
@@ -1414,6 +1415,24 @@ export default function Streams() {
                         <div style={{ marginTop:3, fontSize:10, color:'var(--warning)', display:'flex', alignItems:'center', gap:4 }}>
                           <span>🔑</span>
                           <span>Cookies expirados — exporte novos cookies do navegador e cole nas configurações</span>
+                        </div>
+                      )}
+                      {stats[s.id]?.frame_status === 'black' && (
+                        <div style={{ marginTop:3, fontSize:10, color:'var(--warning)', display:'flex', alignItems:'center', gap:4 }}>
+                          <span>⬛</span>
+                          <span>Vídeo preto — fonte pode estar off-air</span>
+                        </div>
+                      )}
+                      {stats[s.id]?.frame_status === 'frozen' && (
+                        <div style={{ marginTop:3, fontSize:10, color:'var(--warning)', display:'flex', alignItems:'center', gap:4 }}>
+                          <span>🔁</span>
+                          <span>Frame congelado — encoder pode estar travado</span>
+                        </div>
+                      )}
+                      {stats[s.id]?.frame_status === 'no_signal' && (
+                        <div style={{ marginTop:3, fontSize:10, color:'var(--danger)', display:'flex', alignItems:'center', gap:4 }}>
+                          <span>📡</span>
+                          <span>Sem sinal — fonte parou de transmitir</span>
                         </div>
                       )}
                       {stats[s.id]?.ban_detected && (

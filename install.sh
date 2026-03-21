@@ -422,7 +422,7 @@ create_env() {
 build_frontend() {
     info "Build do frontend React"
     cd "${PROJECT_DIR}/frontend"
-    npm ci --silent
+    npm install --loglevel=warn
     npm run build --silent
     ok "Frontend buildado em frontend/dist/"
 }

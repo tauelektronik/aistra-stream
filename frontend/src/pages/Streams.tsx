@@ -384,6 +384,10 @@ function StreamModal({ stream, onSave, onClose }: {
               <Sel form={form} set={set} k="drm_type" opts={[['none','Sem DRM'],['cenc_ctr','CENC-CTR (Disney+, etc.)']]} />
             </Row>
             {form.drm_type === 'cenc_ctr' && <>
+              <div style={{ background:'rgba(129,140,248,0.08)', border:'1px solid rgba(129,140,248,0.25)', borderRadius:6, padding:'8px 12px', fontSize:12, color:'var(--text2)', marginBottom:4 }}>
+                <strong>Disney+ / DRM:</strong> coloque o URL da <em>página</em> do evento (ex: <code>https://www.disneyplus.com/video/...</code>) — não o URL do CDN capturado pelo DevTools (esses tokens são bloqueados por IP).<br/>
+                Adicione seus cookies do Disney+ no campo <strong>Cookies (Netscape)</strong> abaixo para que o sistema gere um URL CDN válido para o IP do servidor.
+              </div>
               <Row label="Keys / CDM Script" hint="Um par KID:KEY por linha — formato de saída de CDM tools">
                 <textarea
                   rows={5}
@@ -429,22 +433,23 @@ function StreamModal({ stream, onSave, onClose }: {
               </Row>
             </div>
 
-            {/youtube\.com|youtu\.be/i.test(form.url || '') && (
+            {(/youtube\.com|youtu\.be/i.test(form.url || '') || form.drm_type === 'cenc_ctr') && (
               <div style={{ marginTop:8, borderTop:'1px solid var(--border)', paddingTop:16 }}>
                 <div style={{ fontSize:11, fontWeight:600, color:'var(--warning)', marginBottom:4, textTransform:'uppercase', letterSpacing:'0.05em', display:'flex', alignItems:'center', gap:6 }}>
-                  🔑 YouTube — Cookies de autenticação
+                  🔑 {form.drm_type === 'cenc_ctr' ? 'Cookies de autenticação (Disney+, etc.)' : 'YouTube — Cookies de autenticação'}
                 </div>
                 <div style={{ fontSize:11, color:'var(--text3)', marginBottom:10, lineHeight:1.5 }}>
-                  Necessário quando o YouTube exibe o erro <em>"Sign in to confirm you're not a bot"</em>.
-                  Exporte os cookies do navegador no formato Netscape usando a extensão{' '}
-                  <strong>Get cookies.txt LOCALLY</strong> (Chrome/Edge/Firefox) e cole o conteúdo abaixo.
+                  {form.drm_type === 'cenc_ctr'
+                    ? <>Exporte os cookies do Disney+ (ou outro serviço DRM) usando a extensão <strong>Get cookies.txt LOCALLY</strong> (Chrome/Edge/Firefox). O sistema usa esses cookies para gerar um URL CDN válido para o IP do servidor.</>
+                    : <>Necessário quando o YouTube exige login. Exporte os cookies do navegador com a extensão <strong>Get cookies.txt LOCALLY</strong> e cole abaixo.</>
+                  }
                 </div>
                 <Row label="Cookies (Netscape)" hint="Cole o conteúdo do arquivo cookies.txt exportado pelo navegador">
                   <textarea
                     rows={5}
                     value={form.yt_cookies||''}
                     onChange={e => set('yt_cookies', e.target.value)}
-                    placeholder={'# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t...\tCOOKIE_NAME\tVALUE'}
+                    placeholder={'# Netscape HTTP Cookie File\n.disneyplus.com\tTRUE\t/\tTRUE\t...\tBAMGUID\tVALUE'}
                     style={{ fontFamily:'monospace', fontSize:11, resize:'vertical' }}
                   />
                 </Row>

@@ -62,6 +62,14 @@ _YT_RE = re.compile(
     r'(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/(?:watch\?.*v=|live/|shorts/)|youtu\.be/)([A-Za-z0-9_-]{11})'
 )
 
+# Sites cujo URL de página pode ser resolvido via yt-dlp para obter o manifest CDN
+# (quando yt_cookies está configurado no stream)
+_YTDLP_SITE_RE = re.compile(
+    r'disneyplus\.com|paramountplus\.com|espn\.com/watch|globoplay\.globo\.com|'
+    r'hbomax\.com|max\.com|peacocktv\.com|sling\.com|hotstar\.com|hulu\.com|'
+    r'netflix\.com|primevideo\.com'
+)
+
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
 
@@ -157,6 +165,54 @@ async def _resolve_youtube_url(url: str, target_height: int,
                     os.unlink(tmp_cookie_path)
                 except OSError:
                     pass
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _run)
+
+
+async def _resolve_site_url_via_ytdlp(url: str, target_height: int,
+                                       cookies_content: str | None = None) -> str:
+    """Resolve a streaming site page URL (Disney+, etc.) to a direct HLS manifest URL.
+
+    Runs yt-dlp on the server so the resulting CDN URL is bound to the server's IP,
+    avoiding IP-locked CDN tokens generated in the browser.
+    Returns original url if resolution fails.
+    """
+    import subprocess as _sp
+    import tempfile as _tmp
+
+    fmt = f"best[height<={target_height}]/best" if target_height else "best"
+
+    def _run():
+        tmp_cookie_path = None
+        try:
+            cmd = [YTDLP, "-g", "-f", fmt, "--no-playlist", "-q"]
+            if cookies_content and cookies_content.strip():
+                tmp = _tmp.NamedTemporaryFile(mode="w", suffix=".txt",
+                                              prefix="site_cookies_", delete=False)
+                tmp.write(cookies_content)
+                tmp.close()
+                tmp_cookie_path = tmp.name
+                cmd += ["--cookies", tmp_cookie_path]
+            elif YTDLP_COOKIES and os.path.exists(YTDLP_COOKIES):
+                cmd += ["--cookies", YTDLP_COOKIES]
+            cmd.append(url)
+            result = _sp.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0:
+                lines = [l.strip() for l in result.stdout.strip().splitlines()
+                         if l.strip().startswith("http")]
+                if lines:
+                    logger.info("yt-dlp resolved site URL: %s → %s…", url[:60], lines[0][:80])
+                    return lines[0]
+            logger.warning("yt-dlp site resolve failed for %s: %s", url[:80], result.stderr[:300])
+            return url
+        except Exception as exc:
+            logger.warning("yt-dlp site resolve error: %s", exc)
+            return url
+        finally:
+            if tmp_cookie_path:
+                try: os.unlink(tmp_cookie_path)
+                except OSError: pass
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _run)
@@ -878,6 +934,24 @@ class HLSManager:
         tmp_cwd = os.path.join(TMP_BASE, sid)
         shutil.rmtree(tmp_cwd, ignore_errors=True)
         os.makedirs(tmp_cwd, exist_ok=True)
+
+        # ── If URL is a streaming site page (not a raw CDN manifest), resolve via
+        #    yt-dlp running on the server so the CDN token is bound to the server IP.
+        #    This fixes Disney+ "IP-locked token" 403 errors when the user pastes a
+        #    URL captured from browser DevTools (which is locked to the browser's IP).
+        yt_cookies = getattr(stream, "yt_cookies", None)
+        target_h   = _height_from_resolution(getattr(stream, "video_resolution", "original"))
+        if _YTDLP_SITE_RE.search(url):
+            resolved = await _resolve_site_url_via_ytdlp(
+                url, target_h or 1080, cookies_content=yt_cookies
+            )
+            if resolved != url:
+                url = resolved
+            else:
+                logger.warning(
+                    "CENC %s: yt-dlp could not resolve site URL — "
+                    "trying original URL (may 403 if IP-locked)", sid
+                )
 
         clean_url  = url.split("#")[0]
         key_pairs  = []

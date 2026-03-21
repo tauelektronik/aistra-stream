@@ -31,6 +31,7 @@ interface StreamStats {
   fps: string; bitrate_kbps: number; frame: string; speed: string
   drop_frames: number; dup_frames: number; total_size_mb: number
   ban_detected: boolean; ban_http_code: number; ban_count: number; ban_at: number | null
+  restart_count: number; max_restarts: number
 }
 
 const BLANK: Omit<Stream, 'status'|'created_at'|'updated_at'> = {
@@ -1367,6 +1368,11 @@ export default function Streams() {
                         )}
                         <span>· 🔊 {s.audio_codec}{s.audio_codec !== 'copy' ? ` ${s.audio_bitrate}` : ''}</span>
                         {s.buffer_seconds && <span>· ⏳ buf {s.buffer_seconds}s</span>}
+                        {stats[s.id] && (
+                          <span style={{ color: stats[s.id].restart_count > 0 ? 'var(--warning)' : 'var(--text3)', display:'flex', alignItems:'center', gap:3 }}>
+                            · <FiRefreshCw size={9} /> {stats[s.id].restart_count}/{stats[s.id].max_restarts}
+                          </span>
+                        )}
                         {s.drm_type === 'cenc_ctr' && (
                           <span style={{ color:'#818cf8' }}>· 🔐 DRM</span>
                         )}

@@ -626,6 +626,8 @@ class HLSManager:
             "ban_http_code":  ban.get("http_code", 0),
             "ban_count":      ban.get("count", 0),
             "ban_at":         ban.get("at", None),
+            "restart_count":  self._restart_counts.get(stream_id, 0),
+            "max_restarts":   MAX_RESTARTS,
         }
 
     # ── Recording ────────────────────────────────────────────────────────────

@@ -23,7 +23,13 @@
       "Bash(npx --version)",
       "Bash(uvx --version)",
       "Bash(pip show:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''backend/main.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(python -m pytest tests/test_backup.py -v --tb=short)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''backend/main.py''\\).read\\(\\)\\); print\\(''main.py OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''backend/backup.py''\\).read\\(\\)\\); print\\(''backup.py OK''\\)\")",
+      "Bash(npx tsc:*)",
+      "Bash(find 'c:\\\\Users\\\\TAU\\\\Documents\\\\VS Code\\\\aistra-stream\\\\frontend\\\\src' -name *.css -type f)"
     ]
   }
 }

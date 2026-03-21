@@ -3,11 +3,14 @@ aistra-stream — FastAPI main application
 Streaming panel with MySQL auth, per-stream HLS delivery.
 """
 import asyncio
+import hashlib
 import io
 import json
 import logging
 import os
 import re
+import shutil
+import tempfile
 import time
 import zipfile
 from contextlib import asynccontextmanager
@@ -34,6 +37,7 @@ from backend.crud import (
     create_category, update_category, delete_category, assign_streams_to_category,
     load_settings_db, save_settings_db,
 )
+from backend import backup as _bkp
 from backend.database import get_db, init_db
 from backend.hls_manager import hls_manager, HLS_BASE
 from backend.schemas import (
@@ -727,78 +731,36 @@ async def api_save_settings(
 
 
 # ── Professional ZIP Backup System ────────────────────────────────────────────
+#
+# Design for large backups:
+#   • _create_full_backup() writes directly to disk (no full-ZIP in RAM)
+#   • Atomic write: temp file → os.replace() — no partial/corrupt files
+#   • _restore_from_zip() opens the ZIP from disk — no load-into-memory
+#   • restore-upload streams to a temp file first (no RAM doubling)
+#   • Logo extraction uses shutil.copyfileobj() (streaming, chunk-by-chunk)
+#   • SHA-256 checksums of each JSON blob written to manifest for integrity
+# ──────────────────────────────────────────────────────────────────────────────
+
+_BACKUP_MAX_UPLOAD = _bkp.BACKUP_MAX_UPLOAD   # 2 GB hard cap for uploaded ZIPs
+
 
 def _model_to_dict(obj) -> dict:
-    """Serialize a SQLAlchemy model row to a plain dict (ISO dates)."""
-    row: dict = {}
-    for col in obj.__table__.columns:
-        v = getattr(obj, col.name)
-        if hasattr(v, "isoformat"):
-            v = v.isoformat()
-        row[col.name] = v
-    return row
+    return _bkp.model_to_dict(obj)
 
 
-async def _create_full_backup(db: AsyncSession) -> bytes:
-    """Build a ZIP archive in memory and return raw bytes.
-    Archive layout:
-      manifest.json   — version, timestamp, table counts
-      streams.json    — all streams
-      users.json      — all users (password_hash included for full restore)
-      categories.json — all categories
-      settings.json   — all settings (telegram token cleared)
-      logos/          — all logo files
-    """
-    streams    = await list_streams(db)
-    users_list = await list_users(db)
-    cats       = await list_categories(db)
-    settings   = await load_settings_db(db)
-
-    # Mask Telegram token so backups don't leak secrets
-    safe_settings = dict(settings)
-    if safe_settings.get("telegram_bot_token"):
-        safe_settings["telegram_bot_token"] = ""
-
-    streams_data = [_model_to_dict(s) for s in streams]
-    users_data   = [_model_to_dict(u) for u in users_list]
-    cats_data    = [_model_to_dict(c) for c in cats]
-
-    manifest = {
-        "version": 2,
-        "format": "aistra-zip-backup",
-        "exported_at": datetime.now(timezone.utc).isoformat(),
-        "counts": {
-            "streams":    len(streams_data),
-            "users":      len(users_data),
-            "categories": len(cats_data),
-            "settings":   len(safe_settings),
-        },
-    }
-
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("manifest.json",   json.dumps(manifest,      ensure_ascii=False, indent=2))
-        zf.writestr("streams.json",    json.dumps(streams_data,  ensure_ascii=False, indent=2))
-        zf.writestr("users.json",      json.dumps(users_data,    ensure_ascii=False, indent=2))
-        zf.writestr("categories.json", json.dumps(cats_data,     ensure_ascii=False, indent=2))
-        zf.writestr("settings.json",   json.dumps(safe_settings, ensure_ascii=False, indent=2))
-        # Include logo files
-        if os.path.isdir(LOGOS_BASE):
-            for fname in os.listdir(LOGOS_BASE):
-                fpath = os.path.join(LOGOS_BASE, fname)
-                if os.path.isfile(fpath):
-                    zf.write(fpath, f"logos/{fname}")
-    return buf.getvalue()
+async def _create_full_backup(db: AsyncSession, dest_path: str) -> int:
+    """Delegate to backend.backup.create_full_backup (see that module for full docs)."""
+    return await _bkp.create_full_backup(
+        db, dest_path, LOGOS_BASE,
+        list_streams_fn    = list_streams,
+        list_users_fn      = list_users,
+        list_categories_fn = list_categories,
+        load_settings_fn   = load_settings_db,
+    )
 
 
 async def _apply_backup_retention(retention: int):
-    """Delete oldest auto-backup files keeping only `retention` most recent."""
-    files = sorted(Path(BACKUPS_BASE).glob("auto_*.zip"), key=lambda p: p.stat().st_mtime)
-    while len(files) > retention:
-        try:
-            files.pop(0).unlink()
-        except OSError:
-            break
+    _bkp.apply_backup_retention(BACKUPS_BASE, retention)
 
 
 async def _backup_scheduler():
@@ -809,8 +771,8 @@ async def _backup_scheduler():
             await asyncio.sleep(3600)   # check every hour
             async with AsyncSessionLocal() as db:
                 s = await load_settings_db(db)
-            enabled  = bool(s.get("backup_auto_enabled", False))
-            interval = int(s.get("backup_interval_hours", 24))
+            enabled   = bool(s.get("backup_auto_enabled", False))
+            interval  = int(s.get("backup_interval_hours", 24))
             retention = int(s.get("backup_retention", 7))
             if not enabled:
                 continue
@@ -821,18 +783,14 @@ async def _backup_scheduler():
                 reverse=True,
             )
             if auto_files:
-                last_mtime = auto_files[0].stat().st_mtime
-                age_hours  = (datetime.now(timezone.utc).timestamp() - last_mtime) / 3600
+                age_hours = (datetime.now(timezone.utc).timestamp() - auto_files[0].stat().st_mtime) / 3600
                 if age_hours < interval:
                     continue
-            # Create backup
-            async with AsyncSessionLocal() as db:
-                data = await _create_full_backup(db)
             ts   = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             path = os.path.join(BACKUPS_BASE, f"auto_{ts}.zip")
-            with open(path, "wb") as f:
-                f.write(data)
-            logger.info("Auto-backup created: %s (%d KB)", path, len(data) // 1024)
+            async with AsyncSessionLocal() as db:
+                size = await _create_full_backup(db, path)
+            logger.info("Auto-backup created: %s (%d KB)", path, size // 1024)
             await _apply_backup_retention(retention)
         except asyncio.CancelledError:
             raise
@@ -848,14 +806,12 @@ async def api_backup_create(
     actor=Depends(require_admin),
 ):
     """Create a manual full-backup ZIP and store it on the server."""
-    data = await _create_full_backup(db)
-    ts   = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    ts       = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = f"manual_{ts}.zip"
-    path = os.path.join(BACKUPS_BASE, filename)
-    with open(path, "wb") as f:
-        f.write(data)
-    audit.info("BACKUP_CREATE actor=%s file=%s size=%d", actor.username, filename, len(data))
-    return {"filename": filename, "size": len(data)}
+    path     = os.path.join(BACKUPS_BASE, filename)
+    size     = await _create_full_backup(db, path)
+    audit.info("BACKUP_CREATE actor=%s file=%s size=%d", actor.username, filename, size)
+    return {"filename": filename, "size": size}
 
 
 @app.get("/api/backup/list")
@@ -865,18 +821,17 @@ async def api_backup_list(_=Depends(require_admin)):
     for p in sorted(Path(BACKUPS_BASE).glob("*.zip"), key=lambda x: x.stat().st_mtime, reverse=True):
         stat = p.stat()
         files.append({
-            "filename": p.name,
-            "size":     stat.st_size,
+            "filename":   p.name,
+            "size":       stat.st_size,
             "created_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-            "type": "auto" if p.name.startswith("auto_") else "manual",
+            "type":       "auto" if p.name.startswith("auto_") else "manual",
         })
     return files
 
 
 @app.get("/api/backup/download/{filename}")
 async def api_backup_download(filename: str, _=Depends(require_admin)):
-    """Download a backup ZIP file."""
-    # Prevent path traversal
+    """Download a backup ZIP file (streamed — safe for large files)."""
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Nome de arquivo inválido")
     path = os.path.join(BACKUPS_BASE, filename)
@@ -905,15 +860,13 @@ async def api_backup_restore_stored(
     db: AsyncSession = Depends(get_db),
     actor=Depends(require_admin),
 ):
-    """Restore from a stored backup file."""
+    """Restore from a stored backup file (reads from disk — no RAM load)."""
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Nome de arquivo inválido")
     path = os.path.join(BACKUPS_BASE, filename)
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="Backup não encontrado")
-    with open(path, "rb") as f:
-        data = f.read()
-    result = await _restore_from_zip(db, data)
+    result = await _restore_from_zip(db, path)
     audit.info("BACKUP_RESTORE actor=%s file=%s result=%s ip=%s",
                actor.username, filename, result,
                request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
@@ -927,93 +880,73 @@ async def api_backup_restore_upload(
     db: AsyncSession = Depends(get_db),
     actor=Depends(require_admin),
 ):
-    """Restore by uploading a backup ZIP file directly."""
-    data = await file.read()
-    if len(data) > 200 * 1024 * 1024:   # 200 MB cap
-        raise HTTPException(status_code=413, detail="Arquivo muito grande (máx 200 MB)")
-    result = await _restore_from_zip(db, data)
+    """Restore by uploading a backup ZIP.
+    Upload is streamed to a temp file first — no full-file load into RAM.
+    Safe for backups up to 2 GB.
+    """
+    # Stream upload to a temp file in BACKUPS_BASE (same filesystem → fast rename)
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".zip", dir=BACKUPS_BASE)
+    written = 0
+    try:
+        with os.fdopen(tmp_fd, "wb") as tmp_fh:
+            while True:
+                chunk = await file.read(_bkp.BACKUP_CHUNK)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > _BACKUP_MAX_UPLOAD:
+                    raise HTTPException(status_code=413,
+                                        detail=f"Arquivo muito grande (máx {_BACKUP_MAX_UPLOAD // 1024**3} GB)")
+                tmp_fh.write(chunk)
+        result = await _restore_from_zip(db, tmp_path)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
     audit.info("BACKUP_RESTORE_UPLOAD actor=%s size=%d result=%s ip=%s",
-               actor.username, len(data), result,
+               actor.username, written, result,
                request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
     return result
 
 
-async def _restore_from_zip(db: AsyncSession, data: bytes) -> dict:
-    """Parse a ZIP backup and restore streams, users, categories, settings, logos."""
+async def _restore_from_zip(db: AsyncSession, zip_path: str) -> dict:
+    """Delegate to backend.backup.restore_from_zip (see that module for full docs)."""
+    from backend.models import User as _UserModel
+    from backend.schemas import StreamCreate, StreamUpdate, CategoryCreate
+
+    async def _create_user_raw(db, row):
+        u = _UserModel(**row)
+        db.add(u)
+        await db.commit()
+
+    async def _update_user_raw(db, existing, row):
+        for field in ("email", "role", "active", "password_hash"):
+            if field in row:
+                setattr(existing, field, row[field])
+        await db.commit()
+
     try:
-        zf = zipfile.ZipFile(io.BytesIO(data))
-    except Exception:
-        raise HTTPException(status_code=400, detail="Arquivo ZIP inválido")
-
-    names = zf.namelist()
-    if "manifest.json" not in names:
-        raise HTTPException(status_code=400, detail="ZIP não contém manifest.json — não é um backup aistra")
-
-    manifest = json.loads(zf.read("manifest.json"))
-    if manifest.get("format") != "aistra-zip-backup":
-        raise HTTPException(status_code=400, detail="Formato de backup não reconhecido")
-
-    created = updated = skipped = 0
-
-    # ── Streams ──
-    if "streams.json" in names:
-        for row in json.loads(zf.read("streams.json")):
-            sid = row.get("id")
-            if not sid:
-                skipped += 1
-                continue
-            try:
-                for ts_field in ("created_at", "updated_at"):
-                    row.pop(ts_field, None)
-                existing = await get_stream(db, sid)
-                if existing:
-                    from backend.schemas import StreamUpdate as SU
-                    await update_stream(db, sid, SU(**{k: v for k, v in row.items() if k != "id"}))
-                    updated += 1
-                else:
-                    from backend.schemas import StreamCreate as SC
-                    await create_stream(db, SC(**row))
-                    created += 1
-            except Exception as exc:
-                logger.warning("Restore stream %s: %s", sid, exc)
-                skipped += 1
-
-    # ── Categories ──
-    if "categories.json" in names:
-        for row in json.loads(zf.read("categories.json")):
-            if not row.get("name"):
-                continue
-            try:
-                row.pop("created_at", None)
-                existing = await get_category_by_name(db, row["name"])
-                if not existing:
-                    from backend.schemas import CategoryCreate as CC
-                    await create_category(db, CC(name=row["name"]))
-            except Exception as exc:
-                logger.warning("Restore category %s: %s", row.get("name"), exc)
-
-    # ── Settings ──
-    if "settings.json" in names:
-        imported = json.loads(zf.read("settings.json"))
-        current  = await load_settings_db(db)
-        # Keep existing Telegram token if backup has it cleared
-        if not imported.get("telegram_bot_token"):
-            imported.pop("telegram_bot_token", None)
-        current.update(imported)
-        await save_settings_db(db, current)
-
-    # ── Logos ──
-    os.makedirs(LOGOS_BASE, exist_ok=True)
-    for name in names:
-        if name.startswith("logos/") and not name.endswith("/"):
-            fname = os.path.basename(name)
-            if fname:
-                dest = os.path.join(LOGOS_BASE, fname)
-                with open(dest, "wb") as f:
-                    f.write(zf.read(name))
-
-    zf.close()
-    return {"created": created, "updated": updated, "skipped": skipped}
+        return await _bkp.restore_from_zip(
+            db, zip_path, LOGOS_BASE,
+            get_stream_fn          = get_stream,
+            create_stream_fn       = create_stream,
+            update_stream_fn       = update_stream,
+            get_user_fn            = get_user_by_username,
+            create_user_raw_fn     = _create_user_raw,
+            update_user_raw_fn     = _update_user_raw,
+            get_category_fn        = get_category_by_name,
+            create_category_fn     = create_category,
+            load_settings_fn       = load_settings_db,
+            save_settings_fn       = save_settings_db,
+            stream_schema_create   = StreamCreate,
+            stream_schema_update   = StreamUpdate,
+            category_schema_create = CategoryCreate,
+        )
+    except ValueError as exc:
+        status = 422 if "checksum" in str(exc).lower() else 400
+        raise HTTPException(status_code=status, detail=str(exc))
 
 
 # ── Legacy JSON backup endpoint (kept for compatibility) ───────────────────────
@@ -1342,39 +1275,81 @@ def _query_nvidia_smi() -> dict | None:
     try:
         r = _sp.run(
             ["nvidia-smi",
-             "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+             "--query-gpu=name,utilization.gpu,utilization.encoder,utilization.decoder,"
+             "memory.used,memory.total,temperature.gpu",
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=3,
         )
         if r.returncode == 0:
             parts = [p.strip() for p in r.stdout.strip().split(",")]
-            if len(parts) >= 5:
+            if len(parts) >= 7:
                 return {
                     "name":            parts[0],
                     "utilization_pct": int(parts[1]),
-                    "memory_used_mb":  int(parts[2]),
-                    "memory_total_mb": int(parts[3]),
-                    "temperature_c":   int(parts[4]),
+                    "enc_pct":         int(parts[2]),
+                    "dec_pct":         int(parts[3]),
+                    "memory_used_mb":  int(parts[4]),
+                    "memory_total_mb": int(parts[5]),
+                    "temperature_c":   int(parts[6]),
                 }
     except Exception:
         pass
     return None
 
 
+def _get_cpu_name() -> str:
+    """Return CPU model name — tries wmic on Windows, /proc/cpuinfo on Linux."""
+    import platform, subprocess as _sp
+    try:
+        if platform.system() == "Windows":
+            r = _sp.run(["wmic", "cpu", "get", "name", "/value"],
+                        capture_output=True, text=True, timeout=3)
+            for line in r.stdout.splitlines():
+                if line.startswith("Name="):
+                    return line.split("=", 1)[1].strip()
+        else:
+            with open("/proc/cpuinfo") as f:
+                for line in f:
+                    if "model name" in line:
+                        return line.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return platform.processor() or "CPU"
+
+
 async def _server_stats_updater():
     """Background task: refresh server stats every 5 seconds."""
     import psutil
 
-    psutil.cpu_percent(interval=None)   # prime the CPU counter
+    psutil.cpu_percent(interval=None)          # prime total CPU counter
+    psutil.cpu_percent(percpu=True)            # prime per-core counter
 
     _net_prev_bytes = psutil.net_io_counters()
     loop = asyncio.get_running_loop()
+
+    # Collect once-only static info
+    _cpu_name = await loop.run_in_executor(None, _get_cpu_name)
+
     while True:
         await asyncio.sleep(5)
         try:
-            cpu_pct = psutil.cpu_percent(interval=None)
-            mem     = psutil.virtual_memory()
-            disk    = psutil.disk_usage("/")
+            cpu_pct      = psutil.cpu_percent(interval=None)
+            cpu_per_core = psutil.cpu_percent(percpu=True)
+            cpu_freq     = psutil.cpu_freq()
+            mem          = psutil.virtual_memory()
+            swap         = psutil.swap_memory()
+            disk         = psutil.disk_usage("/")
+
+            # CPU temperature (Linux: coretemp/k10temp; Windows: usually unavailable)
+            cpu_temp = None
+            try:
+                temps = psutil.sensors_temperatures()
+                for key in ("coretemp", "k10temp", "cpu_thermal", "acpitz"):
+                    if key in temps and temps[key]:
+                        cpu_temp = round(temps[key][0].current, 1)
+                        break
+            except Exception:
+                pass
 
             net_cur         = psutil.net_io_counters()
             net_up_bps      = max(0, (net_cur.bytes_sent - _net_prev_bytes.bytes_sent) // 5)
@@ -1385,16 +1360,25 @@ async def _server_stats_updater():
             gpu = await loop.run_in_executor(None, _query_nvidia_smi)
 
             _server_stats_cache.update({
-                "cpu_pct":       round(cpu_pct, 1),
-                "mem_used_gb":   round(mem.used   / 1024 ** 3, 1),
-                "mem_total_gb":  round(mem.total  / 1024 ** 3, 1),
-                "mem_pct":       round(mem.percent, 1),
-                "disk_used_gb":  round(disk.used  / 1024 ** 3, 1),
-                "disk_total_gb": round(disk.total / 1024 ** 3, 1),
-                "disk_pct":      round(disk.percent, 1),
-                "net_up_mbps":   round(net_up_bps   / 1024 ** 2, 2),
-                "net_down_mbps": round(net_down_bps / 1024 ** 2, 2),
-                "gpu":           gpu,
+                "cpu_pct":            round(cpu_pct, 1),
+                "cpu_per_core":       [round(v, 1) for v in cpu_per_core],
+                "cpu_name":           _cpu_name,
+                "cpu_freq_mhz":       round(cpu_freq.current) if cpu_freq else 0,
+                "cpu_temp_c":         cpu_temp,
+                "mem_used_gb":        round(mem.used   / 1024 ** 3, 2),
+                "mem_total_gb":       round(mem.total  / 1024 ** 3, 2),
+                "mem_pct":            round(mem.percent, 1),
+                "mem_swap_pct":       round(swap.percent, 1),
+                "mem_swap_used_gb":   round(swap.used  / 1024 ** 3, 2),
+                "mem_swap_total_gb":  round(swap.total / 1024 ** 3, 2),
+                "disk_used_gb":       round(disk.used  / 1024 ** 3, 1),
+                "disk_total_gb":      round(disk.total / 1024 ** 3, 1),
+                "disk_pct":           round(disk.percent, 1),
+                "net_up_mbps":        round(net_up_bps   / 1024 ** 2, 3),
+                "net_down_mbps":      round(net_down_bps / 1024 ** 2, 3),
+                "net_up_total_gb":    round(net_cur.bytes_sent / 1024 ** 3, 2),
+                "net_down_total_gb":  round(net_cur.bytes_recv / 1024 ** 3, 2),
+                "gpu":                gpu,
             })
         except Exception as _e:
             logger.debug("server_stats_updater error: %s", _e)

@@ -1,13 +1,41 @@
 """
 CRUD operations for User and Stream models.
 """
+import json as _json
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func
 from typing import List, Optional
 
-from backend.models import User, Stream, Category
+from backend.models import User, Stream, Category, Setting
 from backend.auth import hash_password
 from backend.schemas import UserCreate, UserUpdate, StreamCreate, StreamUpdate, CategoryCreate, CategoryUpdate
+
+
+# ── Settings (DB-backed key-value store) ──────────────────────────────────────
+
+async def load_settings_db(db: AsyncSession) -> dict:
+    """Return all settings as a plain dict. Values are JSON-decoded."""
+    result = await db.execute(select(Setting))
+    out: dict = {}
+    for row in result.scalars().all():
+        try:
+            out[row.key] = _json.loads(row.value)
+        except Exception:
+            out[row.key] = row.value
+    return out
+
+
+async def save_settings_db(db: AsyncSession, data: dict):
+    """Upsert each key/value pair into the settings table."""
+    for key, val in data.items():
+        serialized = _json.dumps(val) if not isinstance(val, str) else val
+        result = await db.execute(select(Setting).where(Setting.key == key))
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.value = serialized
+        else:
+            db.add(Setting(key=key, value=serialized))
+    await db.commit()
 
 
 # ── Users ────────────────────────────────────────────────────────────────────

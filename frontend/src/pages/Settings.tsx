@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { FiSave, FiAlertCircle, FiDownload, FiUpload, FiCheckCircle, FiPlus, FiTrash2, FiChevronDown, FiChevronUp } from 'react-icons/fi'
+import { FiSave, FiAlertCircle, FiDownload, FiUpload, FiCheckCircle, FiPlus, FiTrash2, FiChevronDown, FiChevronUp, FiList, FiRefreshCw, FiArchive } from 'react-icons/fi'
 import api from '../api'
 
 interface SettingsData {
@@ -8,6 +8,16 @@ interface SettingsData {
   watchdog_enabled?: boolean
   max_restarts?: number
   yt_refresh_hours?: number
+  backup_auto_enabled?: boolean
+  backup_interval_hours?: number
+  backup_retention?: number
+}
+
+interface BackupFile {
+  filename: string
+  size: number
+  created_at: string
+  type: 'auto' | 'manual'
 }
 
 function Row({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
@@ -123,25 +133,116 @@ export default function Settings() {
     window.dispatchEvent(new Event('sidebar_logo_size'))
   }
 
-  // Backup / restore state
-  const [downloading, setDownloading]   = useState(false)
-  const [restoring, setRestoring]       = useState(false)
+  // Backup state
+  const [backups, setBackups]           = useState<BackupFile[]>([])
+  const [backupsLoading, setBackupsLoading] = useState(false)
+  const [creatingBackup, setCreatingBackup] = useState(false)
+  const [backupMsg, setBackupMsg]       = useState('')
+  const [backupError, setBackupError]   = useState('')
+  const [restoringFile, setRestoringFile] = useState<string | null>(null)
   const [restoreResult, setRestoreResult] = useState<{ created: number; updated: number; skipped: number } | null>(null)
   const [restoreError, setRestoreError] = useState('')
+  const zipFileRef = useRef<HTMLInputElement>(null)
+  // Legacy JSON restore
   const fileRef = useRef<HTMLInputElement>(null)
+  const [restoring, setRestoring]       = useState(false)
+
+  // M3U import state
+  const [m3uImporting, setM3uImporting] = useState(false)
+  const [m3uOverwrite, setM3uOverwrite] = useState(false)
+  const [m3uResult, setM3uResult]       = useState<{ created: number; updated: number; skipped: number; errors: number } | null>(null)
+  const [m3uError, setM3uError]         = useState('')
+  const m3uRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     api.get('/api/settings')
       .then(r => {
         const data = r.data || {}
         setForm(data)
-        // Parse comma-separated chat IDs into array
         const ids = (data.telegram_chat_id || '').split(',').map((s: string) => s.trim()).filter(Boolean)
         setChatIds(ids.length > 0 ? ids : [''])
       })
       .catch(() => {})
       .finally(() => setLoading(false))
+    loadBackups()
   }, [])
+
+  async function loadBackups() {
+    setBackupsLoading(true)
+    try {
+      const res = await api.get('/api/backup/list')
+      setBackups(res.data || [])
+    } catch { /* ignore */ }
+    finally { setBackupsLoading(false) }
+  }
+
+  async function createBackup() {
+    setCreatingBackup(true); setBackupMsg(''); setBackupError('')
+    try {
+      const res = await api.post('/api/backup/create')
+      setBackupMsg(`Backup criado: ${res.data.filename} (${(res.data.size / 1024).toFixed(0)} KB)`)
+      setTimeout(() => setBackupMsg(''), 6000)
+      await loadBackups()
+    } catch (e: any) {
+      setBackupError(e.response?.data?.detail || 'Erro ao criar backup')
+      setTimeout(() => setBackupError(''), 6000)
+    } finally { setCreatingBackup(false) }
+  }
+
+  async function downloadZipBackup(filename: string) {
+    const res = await fetch(`/api/backup/download/${encodeURIComponent(filename)}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+    })
+    if (!res.ok) return
+    const blob = await res.blob()
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href = url; a.download = filename; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function deleteBackup(filename: string) {
+    if (!confirm(`Deletar backup "${filename}"?`)) return
+    try {
+      await api.delete(`/api/backup/${encodeURIComponent(filename)}`)
+      await loadBackups()
+    } catch (e: any) {
+      setBackupError(e.response?.data?.detail || 'Erro ao deletar')
+      setTimeout(() => setBackupError(''), 4000)
+    }
+  }
+
+  async function restoreFromServer(filename: string) {
+    if (!confirm(`Restaurar backup "${filename}"?\nIsso irá sobrescrever dados existentes.`)) return
+    setRestoringFile(filename); setRestoreResult(null); setRestoreError('')
+    try {
+      const res = await api.post(`/api/backup/restore/${encodeURIComponent(filename)}`)
+      setRestoreResult(res.data)
+      setTimeout(() => setRestoreResult(null), 8000)
+    } catch (e: any) {
+      setRestoreError(e.response?.data?.detail || 'Erro ao restaurar')
+      setTimeout(() => setRestoreError(''), 6000)
+    } finally { setRestoringFile(null) }
+  }
+
+  async function handleZipRestore(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    setRestoringFile('upload'); setRestoreResult(null); setRestoreError('')
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await api.post('/api/backup/restore-upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      setRestoreResult(res.data)
+      setTimeout(() => setRestoreResult(null), 8000)
+    } catch (e: any) {
+      setRestoreError(e.response?.data?.detail || 'Arquivo inválido ou erro ao restaurar')
+      setTimeout(() => setRestoreError(''), 6000)
+    } finally { setRestoringFile(null) }
+  }
 
   function set(k: keyof SettingsData, v: any) {
     setForm(f => ({ ...f, [k]: v }))
@@ -162,46 +263,41 @@ export default function Settings() {
     }
   }
 
-  async function downloadBackup() {
-    setDownloading(true)
-    try {
-      const res = await fetch('/api/settings/backup', {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const blob = await res.blob()
-      const url  = URL.createObjectURL(blob)
-      const a    = document.createElement('a')
-      const date = new Date().toISOString().slice(0, 10)
-      a.href = url
-      a.download = `aistra-backup-${date}.json`
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch {
-      setError('Erro ao fazer download do backup')
-    } finally {
-      setDownloading(false)
-    }
-  }
-
-  async function handleRestore(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleLegacyRestore(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
-    // Reset input so same file can be re-selected
     e.target.value = ''
-
     setRestoring(true); setRestoreResult(null); setRestoreError('')
     try {
       const text = await file.text()
-      const json = JSON.parse(text)
-      const res  = await api.post('/api/settings/restore', json)
+      const body = JSON.parse(text)
+      const res  = await api.post('/api/settings/restore', body)
       setRestoreResult(res.data)
       setTimeout(() => setRestoreResult(null), 6000)
     } catch (e: any) {
       setRestoreError(e.response?.data?.detail || 'Arquivo inválido ou erro ao restaurar')
       setTimeout(() => setRestoreError(''), 6000)
+    } finally { setRestoring(false) }
+  }
+
+  async function handleM3uImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    setM3uImporting(true); setM3uResult(null); setM3uError('')
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await api.post(`/api/streams/import-m3u?overwrite=${m3uOverwrite}`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      setM3uResult(res.data)
+      setTimeout(() => setM3uResult(null), 8000)
+    } catch (e: any) {
+      setM3uError(e.response?.data?.detail || 'Erro ao importar M3U')
+      setTimeout(() => setM3uError(''), 6000)
     } finally {
-      setRestoring(false)
+      setM3uImporting(false)
     }
   }
 
@@ -333,40 +429,147 @@ export default function Settings() {
 
         {/* Backup & Restore */}
         <div className="card" style={{ padding: 24, marginBottom: 16 }}>
-          <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Backup e Restauração</h2>
+          <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Backup Profissional</h2>
           <p style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 16 }}>
-            O backup inclui todos os streams cadastrados e as configurações do painel.
+            Backup completo em ZIP: streams, usuários, categorias, configurações e logos.
             O Token do Telegram <strong>não</strong> é incluído por segurança.
           </p>
 
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* Auto-backup config */}
+          <div style={{ background: 'var(--bg3)', borderRadius: 8, padding: '14px 16px', marginBottom: 16 }}>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 12 }}>Backup Automático</div>
+            <Row label="Ativar backup automático">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={form.backup_auto_enabled === true}
+                  onChange={e => set('backup_auto_enabled', e.target.checked)}
+                />
+                <span style={{ fontSize: 14 }}>Ativado</span>
+              </label>
+            </Row>
+            <Row label="Intervalo (horas)" hint="A cada quantas horas um backup automático é gerado.">
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="range" min={1} max={168} step={1}
+                  value={form.backup_interval_hours ?? 24}
+                  onChange={e => set('backup_interval_hours', Number(e.target.value))}
+                  style={{ flex: 1, padding: 0, border: 'none', background: 'transparent', accentColor: 'var(--accent)' }}
+                />
+                <span style={{ minWidth: 42, color: 'var(--text2)', fontSize: 13 }}>{form.backup_interval_hours ?? 24}h</span>
+              </div>
+            </Row>
+            <Row label="Retenção (backups automáticos)" hint="Quantos backups automáticos manter. Os mais antigos são deletados.">
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="range" min={1} max={30} step={1}
+                  value={form.backup_retention ?? 7}
+                  onChange={e => set('backup_retention', Number(e.target.value))}
+                  style={{ flex: 1, padding: 0, border: 'none', background: 'transparent', accentColor: 'var(--accent)' }}
+                />
+                <span style={{ minWidth: 36, color: 'var(--text2)', fontSize: 13 }}>{form.backup_retention ?? 7}</span>
+              </div>
+            </Row>
+          </div>
+
+          {/* Manual create */}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
             <button
-              className="btn btn-ghost"
-              onClick={downloadBackup}
-              disabled={downloading}
+              className="btn btn-primary"
+              onClick={createBackup}
+              disabled={creatingBackup}
               style={{ gap: 6 }}
             >
-              <FiDownload size={14} />
-              {downloading ? 'Gerando…' : 'Baixar backup (.json)'}
+              <FiArchive size={14} />
+              {creatingBackup ? 'Criando…' : 'Criar backup agora'}
             </button>
 
             <button
               className="btn btn-ghost"
-              onClick={() => fileRef.current?.click()}
-              disabled={restoring}
+              onClick={() => zipFileRef.current?.click()}
+              disabled={restoringFile !== null}
               style={{ gap: 6 }}
             >
               <FiUpload size={14} />
-              {restoring ? 'Restaurando…' : 'Restaurar backup…'}
+              {restoringFile === 'upload' ? 'Restaurando…' : 'Restaurar de arquivo ZIP…'}
             </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".json,application/json"
-              style={{ display: 'none' }}
-              onChange={handleRestore}
-            />
+            <input ref={zipFileRef} type="file" accept=".zip,application/zip" style={{ display: 'none' }} onChange={handleZipRestore} />
+
+            <button className="btn btn-ghost" onClick={loadBackups} disabled={backupsLoading} style={{ gap: 6 }}>
+              <FiRefreshCw size={13} style={{ animation: backupsLoading ? 'spin 1s linear infinite' : undefined }} />
+              Atualizar lista
+            </button>
           </div>
+
+          {backupMsg && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, color: 'var(--success)', fontSize: 13 }}>
+              <FiCheckCircle size={14} /> {backupMsg}
+            </div>
+          )}
+          {backupError && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, color: 'var(--danger)', fontSize: 13 }}>
+              <FiAlertCircle size={14} /> {backupError}
+            </div>
+          )}
+
+          {/* Backup list */}
+          {backups.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 2 }}>
+                Backups armazenados no servidor ({backups.length})
+              </div>
+              {backups.map(b => (
+                <div key={b.filename} style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  background: 'var(--bg3)', borderRadius: 6, padding: '8px 12px',
+                  fontSize: 12,
+                }}>
+                  <span style={{
+                    background: b.type === 'auto' ? 'var(--bg4)' : 'var(--accent-glow)',
+                    color: b.type === 'auto' ? 'var(--text3)' : 'var(--accent)',
+                    borderRadius: 4, padding: '1px 6px', fontSize: 11, fontWeight: 600,
+                  }}>
+                    {b.type === 'auto' ? 'AUTO' : 'MANUAL'}
+                  </span>
+                  <span style={{ flex: 1, color: 'var(--text2)', fontFamily: 'monospace' }}>{b.filename}</span>
+                  <span style={{ color: 'var(--text3)', whiteSpace: 'nowrap' }}>
+                    {new Date(b.created_at).toLocaleString('pt-BR')} · {(b.size / 1024).toFixed(0)} KB
+                  </span>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    title="Baixar"
+                    onClick={() => downloadZipBackup(b.filename)}
+                    style={{ padding: '4px 8px' }}
+                  >
+                    <FiDownload size={12} />
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    title="Restaurar este backup"
+                    disabled={restoringFile !== null}
+                    onClick={() => restoreFromServer(b.filename)}
+                    style={{ padding: '4px 8px' }}
+                  >
+                    {restoringFile === b.filename ? '…' : <FiUpload size={12} />}
+                  </button>
+                  <button
+                    className="btn btn-danger btn-sm"
+                    title="Deletar"
+                    onClick={() => deleteBackup(b.filename)}
+                    style={{ padding: '4px 8px' }}
+                  >
+                    <FiTrash2 size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            !backupsLoading && (
+              <div style={{ fontSize: 13, color: 'var(--text3)', fontStyle: 'italic' }}>
+                Nenhum backup armazenado. Clique em "Criar backup agora" para gerar o primeiro.
+              </div>
+            )
+          )}
 
           {restoreResult && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, color: 'var(--success)', fontSize: 13 }}>
@@ -377,6 +580,88 @@ export default function Settings() {
           {restoreError && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, color: 'var(--danger)', fontSize: 13 }}>
               <FiAlertCircle size={14} /> {restoreError}
+            </div>
+          )}
+
+          {/* Legacy JSON backup */}
+          <details style={{ marginTop: 20 }}>
+            <summary style={{ fontSize: 12, color: 'var(--text3)', cursor: 'pointer' }}>
+              Backup legado (JSON) — compatibilidade com versões anteriores
+            </summary>
+            <div style={{ paddingTop: 10, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <a
+                href="/api/settings/backup"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-ghost btn-sm"
+                style={{ gap: 6, textDecoration: 'none' }}
+                onClick={e => {
+                  // Add auth header via fetch+blob instead of direct link
+                  e.preventDefault()
+                  fetch('/api/settings/backup', { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } })
+                    .then(r => r.blob()).then(blob => {
+                      const url = URL.createObjectURL(blob)
+                      const a = document.createElement('a')
+                      a.href = url; a.download = `aistra-backup-${new Date().toISOString().slice(0,10)}.json`; a.click()
+                      URL.revokeObjectURL(url)
+                    })
+                }}
+              >
+                <FiDownload size={12} /> Baixar JSON
+              </a>
+              <button className="btn btn-ghost btn-sm" onClick={() => fileRef.current?.click()} disabled={restoring} style={{ gap: 6 }}>
+                <FiUpload size={12} /> {restoring ? 'Restaurando…' : 'Restaurar JSON…'}
+              </button>
+              <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={handleLegacyRestore} />
+            </div>
+          </details>
+        </div>
+
+        {/* M3U Import */}
+        <div className="card" style={{ padding: 24, marginBottom: 16 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Importar Playlist M3U</h2>
+          <p style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 16 }}>
+            Importe canais em lote a partir de um arquivo <code style={{ background: 'var(--bg4)', padding: '1px 5px', borderRadius: 4 }}>.m3u</code> ou <code style={{ background: 'var(--bg4)', padding: '1px 5px', borderRadius: 4 }}>.m3u8</code>.
+            Os campos <code style={{ background: 'var(--bg4)', padding: '1px 5px', borderRadius: 4 }}>tvg-id</code>, <code style={{ background: 'var(--bg4)', padding: '1px 5px', borderRadius: 4 }}>tvg-name</code> e <code style={{ background: 'var(--bg4)', padding: '1px 5px', borderRadius: 4 }}>group-title</code> são lidos automaticamente.
+          </p>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 14, fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={m3uOverwrite}
+              onChange={e => setM3uOverwrite(e.target.checked)}
+            />
+            <span>Sobrescrever streams já existentes (mesmo ID)</span>
+          </label>
+
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button
+              className="btn btn-ghost"
+              onClick={() => m3uRef.current?.click()}
+              disabled={m3uImporting}
+              style={{ gap: 6 }}
+            >
+              <FiList size={14} />
+              {m3uImporting ? 'Importando…' : 'Selecionar arquivo M3U…'}
+            </button>
+            <input
+              ref={m3uRef}
+              type="file"
+              accept=".m3u,.m3u8,application/x-mpegurl,audio/x-mpegurl"
+              style={{ display: 'none' }}
+              onChange={handleM3uImport}
+            />
+          </div>
+
+          {m3uResult && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, color: 'var(--success)', fontSize: 13 }}>
+              <FiCheckCircle size={14} />
+              Importado: {m3uResult.created} criados · {m3uResult.updated} atualizados · {m3uResult.skipped} ignorados · {m3uResult.errors} erros
+            </div>
+          )}
+          {m3uError && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, color: 'var(--danger)', fontSize: 13 }}>
+              <FiAlertCircle size={14} /> {m3uError}
             </div>
           )}
         </div>

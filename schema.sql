@@ -2,24 +2,28 @@
 -- Run: mysql -u root -p < schema.sql
 -- NOTE: SQLAlchemy also auto-creates these tables on first run (init_db).
 --       This file is for reference, manual inspection, and Docker init.
+--
+-- PRODUCTION: replace placeholder passwords before running.
+-- Generate a secure password: openssl rand -base64 32
 
 CREATE DATABASE IF NOT EXISTS aistra_stream CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE aistra_stream;
 
--- Dedicated user (recommended for production)
+-- Dedicated database user (recommended for production)
+-- CHANGE 'aistra123' to a strong password in production.
 CREATE USER IF NOT EXISTS 'aistra'@'localhost' IDENTIFIED BY 'aistra123';
 GRANT ALL PRIVILEGES ON aistra_stream.* TO 'aistra'@'localhost';
 FLUSH PRIVILEGES;
 
--- ── categories ─────────────────────────────────────────────────────────────────
+-- ── categories ──────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS categories (
     id         INT          AUTO_INCREMENT PRIMARY KEY,
     name       VARCHAR(100) UNIQUE NOT NULL,
     logo_path  VARCHAR(500) NULL,
     created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ── users ──────────────────────────────────────────────────────────────────────
+-- ── users ────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (
     id            INT          AUTO_INCREMENT PRIMARY KEY,
     username      VARCHAR(50)  UNIQUE NOT NULL,
@@ -27,10 +31,13 @@ CREATE TABLE IF NOT EXISTS users (
     email         VARCHAR(100) NULL,
     role          ENUM('admin','operator','viewer') NOT NULL DEFAULT 'viewer',
     active        TINYINT(1)   NOT NULL DEFAULT 1,
-    created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
--- ── streams ────────────────────────────────────────────────────────────────────
+    INDEX idx_users_role (role),
+    INDEX idx_users_active (active)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ── streams ──────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS streams (
     id               VARCHAR(50)  PRIMARY KEY,
     name             VARCHAR(150) NOT NULL,
@@ -78,5 +85,49 @@ CREATE TABLE IF NOT EXISTS streams (
     -- Metadata
     enabled          TINYINT(1)   NOT NULL DEFAULT 1,
     created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    updated_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    -- Indexes for common query patterns
+    INDEX idx_streams_name     (name),
+    INDEX idx_streams_enabled  (enabled),
+    INDEX idx_streams_category (category),
+    INDEX idx_streams_updated  (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ── connection_logs ─────────────────────────────────────────────────────────────
+-- Audit trail for login attempts (success and failure).
+-- Auto-rotated: entries older than 90 days are purged by background task.
+CREATE TABLE IF NOT EXISTS connection_logs (
+    id         INT          AUTO_INCREMENT PRIMARY KEY,
+    username   VARCHAR(50)  NOT NULL,
+    ip         VARCHAR(64)  NOT NULL,
+    user_agent VARCHAR(500) NULL,
+    success    TINYINT(1)   NOT NULL,
+    created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    INDEX idx_connlogs_username   (username),
+    INDEX idx_connlogs_ip         (ip),
+    INDEX idx_connlogs_created_at (created_at),   -- used for retention queries
+    INDEX idx_connlogs_success    (success)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ── settings ─────────────────────────────────────────────────────────────────────
+-- Key-value store for application settings (replaces data/settings.json).
+-- Values are JSON-serialized so booleans, ints and strings are preserved.
+CREATE TABLE IF NOT EXISTS settings (
+    `key`  VARCHAR(100) PRIMARY KEY,
+    value  TEXT         NOT NULL DEFAULT ''
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ── login_attempts_rl ────────────────────────────────────────────────────────────
+-- DB-backed rate limiter for the /auth/login endpoint.
+-- Replaces the in-memory dict — survives restarts and works with multiple workers.
+-- Rows older than 2× LOGIN_RATE_WINDOW are purged automatically by background task.
+CREATE TABLE IF NOT EXISTS login_attempts_rl (
+    id           INT      AUTO_INCREMENT PRIMARY KEY,
+    ip           VARCHAR(64) NOT NULL,
+    attempted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    INDEX idx_rl_ip           (ip),
+    INDEX idx_rl_attempted_at (attempted_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

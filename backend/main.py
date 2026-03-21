@@ -3,12 +3,15 @@ aistra-stream — FastAPI main application
 Streaming panel with MySQL auth, per-stream HLS delivery.
 """
 import asyncio
+import io
+import json
 import logging
 import os
 import re
 import time
-from collections import defaultdict
+import zipfile
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -23,12 +26,13 @@ from backend.auth import (
     create_access_token, get_current_user, require_admin, require_operator,
     verify_password,
 )
-from backend.models import ConnectionLog
+from backend.models import ConnectionLog, LoginAttemptRL
 from backend.crud import (
     create_stream, create_user, delete_stream, delete_user, get_stream,
     get_user_by_username, list_streams, list_users, update_stream, update_user,
     list_categories, get_category, get_category_by_name,
     create_category, update_category, delete_category, assign_streams_to_category,
+    load_settings_db, save_settings_db,
 )
 from backend.database import get_db, init_db
 from backend.hls_manager import hls_manager, HLS_BASE
@@ -56,57 +60,98 @@ class ScheduleCreate(BaseModel):
     label:      Optional[str] = None
     repeat:     str = "none"        # none / daily / weekly
 
-FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
-LOGOS_BASE    = os.getenv("LOGOS_BASE", "/tmp/aistra_logos")
+_PROJECT_ROOT  = Path(__file__).parent.parent
+FRONTEND_DIST  = _PROJECT_ROOT / "frontend" / "dist"
+LOGOS_BASE     = os.getenv("LOGOS_BASE",   str(_PROJECT_ROOT / "logos"))
+BACKUPS_BASE   = os.getenv("BACKUPS_BASE", str(_PROJECT_ROOT / "backups"))
 
 
-# ── Simple in-memory rate limiter for login ───────────────────────────────────
+# ── DB-backed rate limiter for login ──────────────────────────────────────────
 
-_login_attempts: dict = defaultdict(list)   # ip → [timestamps]
-LOGIN_LIMIT   = int(os.getenv("LOGIN_RATE_LIMIT", "10"))   # attempts
-LOGIN_WINDOW  = int(os.getenv("LOGIN_RATE_WINDOW", "60"))  # seconds
+LOGIN_LIMIT  = int(os.getenv("LOGIN_RATE_LIMIT",  "10"))   # max attempts
+LOGIN_WINDOW = int(os.getenv("LOGIN_RATE_WINDOW", "60"))   # seconds
 
 
-def _check_rate_limit(ip: str):
-    now = time.monotonic()
-    attempts = [t for t in _login_attempts[ip] if now - t < LOGIN_WINDOW]
-    _login_attempts[ip] = attempts
-    if len(attempts) >= LOGIN_LIMIT:
+async def _check_rate_limit_db(ip: str, db: AsyncSession):
+    """Raise 429 if ip made >= LOGIN_LIMIT attempts in the last LOGIN_WINDOW seconds.
+    Records this attempt in the DB regardless.
+    Survives restarts and works with multiple workers.
+    """
+    import sqlalchemy as _sa
+    window_start = datetime.now(timezone.utc) - timedelta(seconds=LOGIN_WINDOW)
+    result = await db.execute(
+        _sa.select(_sa.func.count(LoginAttemptRL.id))
+        .where(LoginAttemptRL.ip == ip, LoginAttemptRL.attempted_at >= window_start)
+    )
+    count = result.scalar() or 0
+    # Record attempt first so even the rejected request counts
+    db.add(LoginAttemptRL(ip=ip, attempted_at=datetime.now(timezone.utc)))
+    await db.commit()
+    if count >= LOGIN_LIMIT:
         raise HTTPException(
             status_code=429,
             detail=f"Muitas tentativas. Tente novamente em {LOGIN_WINDOW}s.",
         )
-    _login_attempts[ip].append(now)
 
 
-async def _login_attempts_cleanup():
-    """Background task: purge expired IP entries every 5 minutes.
-    Prevents unbounded growth when many different IPs probe the login endpoint.
-    """
+async def _rate_limit_cleanup():
+    """Background task: delete expired login_attempts_rl rows every 10 minutes."""
+    import sqlalchemy as _sa
+    from backend.database import AsyncSessionLocal
     while True:
-        await asyncio.sleep(300)
-        now   = time.monotonic()
-        stale = [ip for ip, ts in list(_login_attempts.items())
-                 if not any(now - t < LOGIN_WINDOW for t in ts)]
-        for ip in stale:
-            _login_attempts.pop(ip, None)
-        if stale:
-            logger.debug("Rate limiter: purged %d stale IP entries", len(stale))
+        await asyncio.sleep(600)
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=LOGIN_WINDOW * 2)
+            async with AsyncSessionLocal() as db:
+                await db.execute(
+                    _sa.delete(LoginAttemptRL).where(LoginAttemptRL.attempted_at < cutoff)
+                )
+                await db.commit()
+        except Exception as exc:
+            logger.debug("Rate-limit cleanup failed: %s", exc)
+
+
+_LOG_RETENTION_DAYS = int(os.getenv("CONNECTION_LOG_RETENTION_DAYS", "90"))
+
+async def _connection_logs_cleanup():
+    """Background task: delete connection_logs older than LOG_RETENTION_DAYS every 24h."""
+    import sqlalchemy as _sa
+    from backend.database import AsyncSessionLocal
+    while True:
+        await asyncio.sleep(86400)   # run once per day
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=_LOG_RETENTION_DAYS)
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    _sa.delete(ConnectionLog).where(ConnectionLog.created_at < cutoff)
+                )
+                await db.commit()
+            deleted = result.rowcount
+            if deleted:
+                logger.info("ConnectionLog: purged %d entries older than %d days", deleted, _LOG_RETENTION_DAYS)
+        except Exception as exc:
+            logger.warning("ConnectionLog cleanup failed: %s", exc)
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    os.makedirs(LOGOS_BASE, exist_ok=True)
+    os.makedirs(LOGOS_BASE,   exist_ok=True)
+    os.makedirs(BACKUPS_BASE, exist_ok=True)
     await init_db()
     hls_manager.startup_cleanup()
     hls_manager.start_background_cleanup()
-    _stats_task   = asyncio.create_task(_server_stats_updater())
-    _cleanup_task = asyncio.create_task(_login_attempts_cleanup())
+    _stats_task    = asyncio.create_task(_server_stats_updater())
+    _rl_task       = asyncio.create_task(_rate_limit_cleanup())
+    _connlog_task  = asyncio.create_task(_connection_logs_cleanup())
+    _backup_task   = asyncio.create_task(_backup_scheduler())
     await _ensure_default_admin()
-    # Apply persisted settings
-    _s = _load_settings()
+    # Apply persisted settings from DB
+    from backend.database import AsyncSessionLocal
+    async with AsyncSessionLocal() as _db:
+        await _migrate_settings_from_file(_db)
+        _s = await load_settings_db(_db)
     if _s.get("telegram_bot_token"):
         hls_manager.TELEGRAM_BOT_TOKEN = _s["telegram_bot_token"]
     if _s.get("telegram_chat_id"):
@@ -115,8 +160,10 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_autostart_enabled_streams())
     yield
     _stats_task.cancel()
-    _cleanup_task.cancel()
-    await asyncio.gather(_stats_task, _cleanup_task, return_exceptions=True)
+    _rl_task.cancel()
+    _connlog_task.cancel()
+    _backup_task.cancel()
+    await asyncio.gather(_stats_task, _rl_task, _connlog_task, _backup_task, return_exceptions=True)
     await hls_manager.shutdown()
     logger.info("aistra-stream stopped")
 
@@ -220,7 +267,7 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
     client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
     if "," in client_ip:
         client_ip = client_ip.split(",")[0].strip()
-    _check_rate_limit(client_ip)
+    await _check_rate_limit_db(client_ip, db)
 
     ua = request.headers.get("User-Agent", "")[:500]
     user = await get_user_by_username(db, body.username)
@@ -375,6 +422,108 @@ async def export_m3u(
                     headers={"Content-Disposition": "attachment; filename=\"aistra.m3u\""})
 
 
+@app.post("/api/streams/import-m3u")
+async def api_import_m3u(
+    file: UploadFile = File(...),
+    overwrite: bool = False,
+    db: AsyncSession = Depends(get_db),
+    actor=Depends(require_operator),
+    request: Request = None,
+):
+    """Import streams from an M3U/M3U8 playlist file.
+    Parses #EXTINF entries and creates streams in bulk.
+    overwrite=true updates existing streams; false skips duplicates.
+    """
+    import re as _re
+
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1", errors="replace")
+
+    def _slugify(name: str) -> str:
+        s = name.lower().strip()
+        s = _re.sub(r"[^a-z0-9\s_-]", "", s)
+        s = _re.sub(r"\s+", "-", s)
+        s = _re.sub(r"-+", "-", s).strip("-")
+        return s[:50] or "stream"
+
+    created = skipped = updated = errors = 0
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line.startswith("#EXTINF"):
+            i += 1
+            continue
+
+        # Find the URL (next non-empty, non-comment line)
+        url = ""
+        j = i + 1
+        while j < len(lines):
+            candidate = lines[j].strip()
+            if candidate and not candidate.startswith("#"):
+                url = candidate
+                break
+            j += 1
+        i = j + 1
+
+        if not url:
+            errors += 1
+            continue
+
+        # Parse attributes from #EXTINF line
+        tvg_id    = _re.search(r'tvg-id=["\']([^"\']*)["\']',    line)
+        tvg_name  = _re.search(r'tvg-name=["\']([^"\']*)["\']',  line)
+        group     = _re.search(r'group-title=["\']([^"\']*)["\']', line)
+        # Channel name after the last comma
+        comma_pos = line.rfind(",")
+        display_name = line[comma_pos + 1:].strip() if comma_pos != -1 else ""
+
+        name     = (tvg_name.group(1) if tvg_name else display_name) or display_name or "Canal"
+        name     = name[:100].strip()
+        category = group.group(1).strip()[:100] if group else None
+
+        # Build a safe ID
+        raw_id = tvg_id.group(1).strip() if tvg_id else ""
+        if not raw_id or not _re.fullmatch(r"[a-zA-Z0-9_-]{2,50}", raw_id):
+            raw_id = _slugify(name)
+        stream_id = raw_id[:50] or "stream"
+
+        # Validate URL (reuse existing validator)
+        try:
+            from backend.schemas import _validate_stream_url
+            _validate_stream_url(url)
+        except Exception:
+            errors += 1
+            continue
+
+        existing = await get_stream(db, stream_id)
+        if existing:
+            if overwrite:
+                from backend.schemas import StreamUpdate as SU
+                patch = SU(name=name, url=url, category=category or existing.category)
+                await update_stream(db, stream_id, patch)
+                updated += 1
+            else:
+                skipped += 1
+            continue
+
+        # Create new stream
+        from backend.schemas import StreamCreate as SC
+        try:
+            await create_stream(db, SC(id=stream_id, name=name, url=url, category=category))
+            created += 1
+        except Exception:
+            errors += 1
+
+    audit.info("M3U_IMPORT actor=%s created=%d updated=%d skipped=%d errors=%d ip=%s",
+               actor.username, created, updated, skipped, errors,
+               request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")) if request else "-")
+    return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
+
+
 @app.post("/api/streams", response_model=StreamOut, status_code=201)
 async def api_create_stream(
     body: StreamCreate,
@@ -514,115 +663,393 @@ async def api_stream_log(
     return {"log": tail}
 
 
-# ── App settings ──────────────────────────────────────────────────────────────
+# ── App settings (DB-backed) ──────────────────────────────────────────────────
 
-# Default: PROJECT_DIR/data/settings.json (persistent across reboots).
-# Override with AISTRA_SETTINGS_FILE env var if needed.
-_PROJECT_ROOT  = Path(__file__).parent.parent
-_SETTINGS_FILE = os.getenv(
+_SETTINGS_FILE_LEGACY = os.getenv(
     "AISTRA_SETTINGS_FILE",
     str(_PROJECT_ROOT / "data" / "settings.json"),
 )
 
-def _load_settings() -> dict:
-    if os.path.exists(_SETTINGS_FILE):
-        try:
-            with open(_SETTINGS_FILE) as f:
-                import json
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
 
-def _save_settings(data: dict):
-    import json
-    os.makedirs(os.path.dirname(_SETTINGS_FILE), exist_ok=True)
-    tmp = _SETTINGS_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, _SETTINGS_FILE)
+async def _migrate_settings_from_file(db: AsyncSession):
+    """One-time migration: import settings.json into the DB if the file exists.
+    Runs on every startup but is a no-op once the file is removed/renamed.
+    """
+    if not os.path.exists(_SETTINGS_FILE_LEGACY):
+        return
+    try:
+        with open(_SETTINGS_FILE_LEGACY) as f:
+            data = json.load(f)
+        if data:
+            existing = await load_settings_db(db)
+            merged = {**data, **existing}   # DB values take priority if already set
+            await save_settings_db(db, merged)
+            # Rename the file so migration doesn't run again
+            os.rename(_SETTINGS_FILE_LEGACY, _SETTINGS_FILE_LEGACY + ".migrated")
+            logger.info("Settings migrated from %s to DB", _SETTINGS_FILE_LEGACY)
+    except Exception as exc:
+        logger.warning("Settings migration from file failed: %s", exc)
 
 
 @app.get("/api/settings")
-async def api_get_settings(_=Depends(require_admin)):
+async def api_get_settings(
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
     """Return current app settings (admin only)."""
-    s = _load_settings()
-    # Never expose secrets — mask token
+    s = await load_settings_db(db)
     masked = dict(s)
     if masked.get("telegram_bot_token"):
-        t = masked["telegram_bot_token"]
+        t = str(masked["telegram_bot_token"])
         masked["telegram_bot_token"] = t[:8] + "***" if len(t) > 8 else "***"
     return masked
 
 
 @app.put("/api/settings")
-async def api_save_settings(body: dict, _=Depends(require_admin)):
-    """Save app settings (admin only)."""
-    current = _load_settings()
-    # Don't overwrite token if masked placeholder was sent
-    if body.get("telegram_bot_token", "").endswith("***"):
-        body["telegram_bot_token"] = current.get("telegram_bot_token", "")
-    current.update(body)
-    _save_settings(current)
-    # Push Telegram config into hls_manager at runtime
-    if "telegram_bot_token" in current:
-        hls_manager.TELEGRAM_BOT_TOKEN = current.get("telegram_bot_token", "")
-    if "telegram_chat_id" in current:
-        hls_manager.TELEGRAM_CHAT_ID = current.get("telegram_chat_id", "")
-    return {"ok": True}
-
-
-# ── Backup / Restore ──────────────────────────────────────────────────────────
-
-@app.get("/api/settings/backup")
-async def api_backup(
+async def api_save_settings(
+    body: dict,
     db: AsyncSession = Depends(get_db),
     _=Depends(require_admin),
 ):
-    """Export all streams + app settings as a JSON backup (admin only)."""
-    import json as _json
-    from datetime import timezone
+    """Save app settings (admin only)."""
+    current = await load_settings_db(db)
+    # Don't overwrite token if masked placeholder was sent
+    if str(body.get("telegram_bot_token", "")).endswith("***"):
+        body["telegram_bot_token"] = current.get("telegram_bot_token", "")
+    current.update(body)
+    await save_settings_db(db, current)
+    # Push Telegram config into hls_manager at runtime
+    if "telegram_bot_token" in current:
+        hls_manager.TELEGRAM_BOT_TOKEN = str(current.get("telegram_bot_token", ""))
+    if "telegram_chat_id" in current:
+        hls_manager.TELEGRAM_CHAT_ID = str(current.get("telegram_chat_id", ""))
+    return {"ok": True}
 
-    streams = await list_streams(db)
-    streams_data = []
-    for s in streams:
-        row = {}
-        for col in s.__table__.columns:
-            v = getattr(s, col.name)
-            if hasattr(v, "isoformat"):
-                v = v.isoformat()
-            row[col.name] = v
-        streams_data.append(row)
 
-    settings = _load_settings()
-    # Mask Telegram token in backup to avoid leaking secrets — user must re-enter
-    masked_settings = dict(settings)
-    if masked_settings.get("telegram_bot_token"):
-        masked_settings["telegram_bot_token"] = ""
+# ── Professional ZIP Backup System ────────────────────────────────────────────
 
-    payload = {
-        "version": 1,
-        "exported_at": __import__("datetime").datetime.now(timezone.utc).isoformat(),
-        "streams": streams_data,
-        "settings": masked_settings,
+def _model_to_dict(obj) -> dict:
+    """Serialize a SQLAlchemy model row to a plain dict (ISO dates)."""
+    row: dict = {}
+    for col in obj.__table__.columns:
+        v = getattr(obj, col.name)
+        if hasattr(v, "isoformat"):
+            v = v.isoformat()
+        row[col.name] = v
+    return row
+
+
+async def _create_full_backup(db: AsyncSession) -> bytes:
+    """Build a ZIP archive in memory and return raw bytes.
+    Archive layout:
+      manifest.json   — version, timestamp, table counts
+      streams.json    — all streams
+      users.json      — all users (password_hash included for full restore)
+      categories.json — all categories
+      settings.json   — all settings (telegram token cleared)
+      logos/          — all logo files
+    """
+    streams    = await list_streams(db)
+    users_list = await list_users(db)
+    cats       = await list_categories(db)
+    settings   = await load_settings_db(db)
+
+    # Mask Telegram token so backups don't leak secrets
+    safe_settings = dict(settings)
+    if safe_settings.get("telegram_bot_token"):
+        safe_settings["telegram_bot_token"] = ""
+
+    streams_data = [_model_to_dict(s) for s in streams]
+    users_data   = [_model_to_dict(u) for u in users_list]
+    cats_data    = [_model_to_dict(c) for c in cats]
+
+    manifest = {
+        "version": 2,
+        "format": "aistra-zip-backup",
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "counts": {
+            "streams":    len(streams_data),
+            "users":      len(users_data),
+            "categories": len(cats_data),
+            "settings":   len(safe_settings),
+        },
     }
-    content = _json.dumps(payload, ensure_ascii=False, indent=2)
-    return Response(
-        content,
-        media_type="application/json",
-        headers={"Content-Disposition": "attachment; filename=\"aistra-backup.json\""},
-    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json",   json.dumps(manifest,      ensure_ascii=False, indent=2))
+        zf.writestr("streams.json",    json.dumps(streams_data,  ensure_ascii=False, indent=2))
+        zf.writestr("users.json",      json.dumps(users_data,    ensure_ascii=False, indent=2))
+        zf.writestr("categories.json", json.dumps(cats_data,     ensure_ascii=False, indent=2))
+        zf.writestr("settings.json",   json.dumps(safe_settings, ensure_ascii=False, indent=2))
+        # Include logo files
+        if os.path.isdir(LOGOS_BASE):
+            for fname in os.listdir(LOGOS_BASE):
+                fpath = os.path.join(LOGOS_BASE, fname)
+                if os.path.isfile(fpath):
+                    zf.write(fpath, f"logos/{fname}")
+    return buf.getvalue()
 
 
-@app.post("/api/settings/restore", status_code=200)
-async def api_restore(
+async def _apply_backup_retention(retention: int):
+    """Delete oldest auto-backup files keeping only `retention` most recent."""
+    files = sorted(Path(BACKUPS_BASE).glob("auto_*.zip"), key=lambda p: p.stat().st_mtime)
+    while len(files) > retention:
+        try:
+            files.pop(0).unlink()
+        except OSError:
+            break
+
+
+async def _backup_scheduler():
+    """Background task: create auto-backups on configurable interval."""
+    from backend.database import AsyncSessionLocal
+    while True:
+        try:
+            await asyncio.sleep(3600)   # check every hour
+            async with AsyncSessionLocal() as db:
+                s = await load_settings_db(db)
+            enabled  = bool(s.get("backup_auto_enabled", False))
+            interval = int(s.get("backup_interval_hours", 24))
+            retention = int(s.get("backup_retention", 7))
+            if not enabled:
+                continue
+            # Check if enough time has passed since last auto-backup
+            auto_files = sorted(
+                Path(BACKUPS_BASE).glob("auto_*.zip"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if auto_files:
+                last_mtime = auto_files[0].stat().st_mtime
+                age_hours  = (datetime.now(timezone.utc).timestamp() - last_mtime) / 3600
+                if age_hours < interval:
+                    continue
+            # Create backup
+            async with AsyncSessionLocal() as db:
+                data = await _create_full_backup(db)
+            ts   = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            path = os.path.join(BACKUPS_BASE, f"auto_{ts}.zip")
+            with open(path, "wb") as f:
+                f.write(data)
+            logger.info("Auto-backup created: %s (%d KB)", path, len(data) // 1024)
+            await _apply_backup_retention(retention)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Backup scheduler error: %s", exc)
+
+
+# ── Backup endpoints ───────────────────────────────────────────────────────────
+
+@app.post("/api/backup/create", status_code=201)
+async def api_backup_create(
+    db: AsyncSession = Depends(get_db),
+    actor=Depends(require_admin),
+):
+    """Create a manual full-backup ZIP and store it on the server."""
+    data = await _create_full_backup(db)
+    ts   = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    filename = f"manual_{ts}.zip"
+    path = os.path.join(BACKUPS_BASE, filename)
+    with open(path, "wb") as f:
+        f.write(data)
+    audit.info("BACKUP_CREATE actor=%s file=%s size=%d", actor.username, filename, len(data))
+    return {"filename": filename, "size": len(data)}
+
+
+@app.get("/api/backup/list")
+async def api_backup_list(_=Depends(require_admin)):
+    """List all stored backup files with metadata."""
+    files = []
+    for p in sorted(Path(BACKUPS_BASE).glob("*.zip"), key=lambda x: x.stat().st_mtime, reverse=True):
+        stat = p.stat()
+        files.append({
+            "filename": p.name,
+            "size":     stat.st_size,
+            "created_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            "type": "auto" if p.name.startswith("auto_") else "manual",
+        })
+    return files
+
+
+@app.get("/api/backup/download/{filename}")
+async def api_backup_download(filename: str, _=Depends(require_admin)):
+    """Download a backup ZIP file."""
+    # Prevent path traversal
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Nome de arquivo inválido")
+    path = os.path.join(BACKUPS_BASE, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Backup não encontrado")
+    return FileResponse(path, media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.delete("/api/backup/{filename}", status_code=204)
+async def api_backup_delete(filename: str, actor=Depends(require_admin)):
+    """Delete a backup file from the server."""
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Nome de arquivo inválido")
+    path = os.path.join(BACKUPS_BASE, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Backup não encontrado")
+    os.unlink(path)
+    audit.info("BACKUP_DELETE actor=%s file=%s", actor.username, filename)
+
+
+@app.post("/api/backup/restore/{filename}", status_code=200)
+async def api_backup_restore_stored(
+    filename: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
     actor=Depends(require_admin),
 ):
-    """Import streams + settings from a previously exported JSON backup (admin only)."""
-    import json as _json
+    """Restore from a stored backup file."""
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Nome de arquivo inválido")
+    path = os.path.join(BACKUPS_BASE, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Backup não encontrado")
+    with open(path, "rb") as f:
+        data = f.read()
+    result = await _restore_from_zip(db, data)
+    audit.info("BACKUP_RESTORE actor=%s file=%s result=%s ip=%s",
+               actor.username, filename, result,
+               request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
+    return result
 
+
+@app.post("/api/backup/restore-upload", status_code=200)
+async def api_backup_restore_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    actor=Depends(require_admin),
+):
+    """Restore by uploading a backup ZIP file directly."""
+    data = await file.read()
+    if len(data) > 200 * 1024 * 1024:   # 200 MB cap
+        raise HTTPException(status_code=413, detail="Arquivo muito grande (máx 200 MB)")
+    result = await _restore_from_zip(db, data)
+    audit.info("BACKUP_RESTORE_UPLOAD actor=%s size=%d result=%s ip=%s",
+               actor.username, len(data), result,
+               request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
+    return result
+
+
+async def _restore_from_zip(db: AsyncSession, data: bytes) -> dict:
+    """Parse a ZIP backup and restore streams, users, categories, settings, logos."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Arquivo ZIP inválido")
+
+    names = zf.namelist()
+    if "manifest.json" not in names:
+        raise HTTPException(status_code=400, detail="ZIP não contém manifest.json — não é um backup aistra")
+
+    manifest = json.loads(zf.read("manifest.json"))
+    if manifest.get("format") != "aistra-zip-backup":
+        raise HTTPException(status_code=400, detail="Formato de backup não reconhecido")
+
+    created = updated = skipped = 0
+
+    # ── Streams ──
+    if "streams.json" in names:
+        for row in json.loads(zf.read("streams.json")):
+            sid = row.get("id")
+            if not sid:
+                skipped += 1
+                continue
+            try:
+                for ts_field in ("created_at", "updated_at"):
+                    row.pop(ts_field, None)
+                existing = await get_stream(db, sid)
+                if existing:
+                    from backend.schemas import StreamUpdate as SU
+                    await update_stream(db, sid, SU(**{k: v for k, v in row.items() if k != "id"}))
+                    updated += 1
+                else:
+                    from backend.schemas import StreamCreate as SC
+                    await create_stream(db, SC(**row))
+                    created += 1
+            except Exception as exc:
+                logger.warning("Restore stream %s: %s", sid, exc)
+                skipped += 1
+
+    # ── Categories ──
+    if "categories.json" in names:
+        for row in json.loads(zf.read("categories.json")):
+            if not row.get("name"):
+                continue
+            try:
+                row.pop("created_at", None)
+                existing = await get_category_by_name(db, row["name"])
+                if not existing:
+                    from backend.schemas import CategoryCreate as CC
+                    await create_category(db, CC(name=row["name"]))
+            except Exception as exc:
+                logger.warning("Restore category %s: %s", row.get("name"), exc)
+
+    # ── Settings ──
+    if "settings.json" in names:
+        imported = json.loads(zf.read("settings.json"))
+        current  = await load_settings_db(db)
+        # Keep existing Telegram token if backup has it cleared
+        if not imported.get("telegram_bot_token"):
+            imported.pop("telegram_bot_token", None)
+        current.update(imported)
+        await save_settings_db(db, current)
+
+    # ── Logos ──
+    os.makedirs(LOGOS_BASE, exist_ok=True)
+    for name in names:
+        if name.startswith("logos/") and not name.endswith("/"):
+            fname = os.path.basename(name)
+            if fname:
+                dest = os.path.join(LOGOS_BASE, fname)
+                with open(dest, "wb") as f:
+                    f.write(zf.read(name))
+
+    zf.close()
+    return {"created": created, "updated": updated, "skipped": skipped}
+
+
+# ── Legacy JSON backup endpoint (kept for compatibility) ───────────────────────
+
+@app.get("/api/settings/backup")
+async def api_backup_legacy(
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    """Legacy: export as JSON (use /api/backup/create for full ZIP backup)."""
+    streams      = await list_streams(db)
+    settings     = await load_settings_db(db)
+    safe_settings = dict(settings)
+    if safe_settings.get("telegram_bot_token"):
+        safe_settings["telegram_bot_token"] = ""
+    payload = {
+        "version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "streams": [_model_to_dict(s) for s in streams],
+        "settings": safe_settings,
+    }
+    content = json.dumps(payload, ensure_ascii=False, indent=2)
+    return Response(
+        content,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="aistra-backup.json"'},
+    )
+
+
+@app.post("/api/settings/restore", status_code=200)
+async def api_restore_legacy(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    actor=Depends(require_admin),
+):
+    """Legacy: restore from JSON backup (use /api/backup/restore-upload for ZIP)."""
     try:
         body = await request.json()
     except Exception:
@@ -632,44 +1059,38 @@ async def api_restore(
         raise HTTPException(status_code=400, detail="Formato de backup não reconhecido (version != 1)")
 
     created = updated = skipped = 0
-
     for row in body.get("streams", []):
         sid = row.get("id")
         if not sid:
             skipped += 1
             continue
         try:
-            # Strip non-model fields and datetimes — let ORM handle timestamps
             for ts_field in ("created_at", "updated_at"):
                 row.pop(ts_field, None)
             existing = await get_stream(db, sid)
             if existing:
                 from backend.schemas import StreamUpdate as SU
-                data = SU(**{k: v for k, v in row.items() if k != "id"})
-                await update_stream(db, sid, data)
+                await update_stream(db, sid, SU(**{k: v for k, v in row.items() if k != "id"}))
                 updated += 1
             else:
                 from backend.schemas import StreamCreate as SC
-                data = SC(**row)
-                await create_stream(db, data)
+                await create_stream(db, SC(**row))
                 created += 1
         except Exception as exc:
             logger.warning("Restore: skipped stream %s: %s", sid, exc)
             skipped += 1
 
     if body.get("settings"):
-        current = _load_settings()
-        # Don't overwrite token with empty string from backup — keep existing
+        current  = await load_settings_db(db)
         imported = dict(body["settings"])
         if not imported.get("telegram_bot_token"):
             imported.pop("telegram_bot_token", None)
         current.update(imported)
-        _save_settings(current)
+        await save_settings_db(db, current)
 
     audit.info("RESTORE actor=%s created=%d updated=%d skipped=%d ip=%s",
                actor.username, created, updated, skipped,
                request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
-
     return {"created": created, "updated": updated, "skipped": skipped}
 
 
@@ -734,8 +1155,16 @@ async def api_delete_category(
     db: AsyncSession = Depends(get_db),
     actor=Depends(require_operator),
 ):
-    if not await delete_category(db, cat_id):
+    cat = await get_category(db, cat_id)
+    if not cat:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    # Remove logo from disk before deleting the record
+    if cat.logo_path:
+        try:
+            os.unlink(os.path.join(LOGOS_BASE, cat.logo_path))
+        except OSError:
+            pass
+    await delete_category(db, cat_id)
     audit.info("CATEGORY_DELETE actor=%s id=%d ip=%s",
                actor.username, cat_id,
                request.headers.get("X-Forwarded-For", getattr(request.client, "host", "-")))
